@@ -37,6 +37,7 @@
 #include "scheduling/scheduling_delta.pb.h"
 #include "scheduling/simple/simple_scheduler.h"
 #include "storage/simple_object_store.h"
+#include "scheduling/event_driven_scheduler.h"
 
 using grpc::Server;
 using grpc::ServerBuilder;
@@ -127,9 +128,11 @@ class FirmamentSchedulerServiceImpl final :
     vector<SchedulingDelta> deltas;
     scheduler_->ScheduleAllJobs(&sstat, &deltas);
     // Extract results
-    LOG(INFO) << "Got " << deltas.size() << " scheduling deltas";
+    if(deltas.size()) {
+      LOG(INFO) << "Got " << deltas.size() << " scheduling deltas";
+    }
     for (auto& d : deltas) {
-      LOG(INFO) << "Delta: " << d.DebugString();
+      //LOG(INFO) << "Delta: " << d.DebugString();
       SchedulingDelta* ret_delta = reply->add_deltas();
       ret_delta->CopyFrom(d);
       if (d.type() == SchedulingDelta::PLACE) {
@@ -197,6 +200,7 @@ class FirmamentSchedulerServiceImpl final :
   Status TaskRemoved(ServerContext* context,
                      const TaskUID* tid_ptr,
                      TaskRemovedResponse* reply) override {
+    boost::lock_guard<boost::recursive_mutex> lock(scheduler_->scheduling_lock_);
     TaskDescriptor* td_ptr = FindPtrOrNull(*task_map_, tid_ptr->task_uid());
     if (td_ptr == NULL) {
       reply->set_type(TaskReplyType::TASK_NOT_FOUND);
@@ -234,6 +238,7 @@ class FirmamentSchedulerServiceImpl final :
   Status TaskSubmitted(ServerContext* context,
                        const TaskDescription* task_desc_ptr,
                        TaskSubmittedResponse* reply) override {
+    boost::lock_guard<boost::recursive_mutex> lock(scheduler_->scheduling_lock_);
     TaskID_t task_id = task_desc_ptr->task_descriptor().uid();
     if (FindPtrOrNull(*task_map_, task_id)) {
       reply->set_type(TaskReplyType::TASK_ALREADY_SUBMITTED);
@@ -245,6 +250,7 @@ class FirmamentSchedulerServiceImpl final :
     }
     JobID_t job_id = JobIDFromString(task_desc_ptr->task_descriptor().job_id());
     JobDescriptor* jd_ptr = FindOrNull(*job_map_, job_id);
+    //LOG(INFO) << "Job id is " << job_id ;
     if (jd_ptr == NULL) {
       CHECK(InsertIfNotPresent(job_map_.get(), job_id,
                                task_desc_ptr->job_descriptor()));
@@ -271,6 +277,8 @@ class FirmamentSchedulerServiceImpl final :
     uint64_t* num_tasks_to_remove =
       FindOrNull(job_num_tasks_to_remove_, job_id);
     (*num_tasks_to_remove)++;
+    if( (*num_tasks_to_remove) >= 3800 )
+	LOG(INFO) << "All tasks are submitted" << job_id << ", " << 3800 ;
     reply->set_type(TaskReplyType::TASK_SUBMITTED_OK);
     return Status::OK;
   }
@@ -320,6 +328,7 @@ class FirmamentSchedulerServiceImpl final :
   Status NodeAdded(ServerContext* context,
                    const ResourceTopologyNodeDescriptor* submitted_rtnd_ptr,
                    NodeAddedResponse* reply) override {
+    boost::lock_guard<boost::recursive_mutex> lock(scheduler_->scheduling_lock_);
     bool doesnt_exist = DFSTraverseResourceProtobufTreeWhileTrue(
         *submitted_rtnd_ptr,
         boost::bind(&FirmamentSchedulerServiceImpl::CheckResourceDoesntExist,
@@ -469,6 +478,8 @@ class FirmamentSchedulerServiceImpl final :
     CHECK(InsertIfNotPresent(resource_map_.get(), res_id, rs_ptr));
     return rs_ptr;
   }
+  boost::recursive_mutex task_submission_lock_;
+  boost::recursive_mutex node_addition_lock_;
 
 };
 

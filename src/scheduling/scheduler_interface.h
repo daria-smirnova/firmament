@@ -66,6 +66,7 @@ struct SchedulerStats {
 
 class SchedulerInterface : public PrintableInterface {
  public:
+  boost::recursive_mutex scheduling_lock_;
   SchedulerInterface(shared_ptr<JobMap_t> job_map,
                      shared_ptr<KnowledgeBase> knowledge_base,
                      shared_ptr<ResourceMap_t> resource_map,
