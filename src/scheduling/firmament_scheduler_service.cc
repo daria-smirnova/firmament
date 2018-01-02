@@ -353,6 +353,35 @@ class FirmamentSchedulerServiceImpl final :
     // it such that Firmament does not mandatorily create an executor.
     scheduler_->RegisterResource(rtnd_ptr, false, true);
     reply->set_type(NodeReplyType::NODE_ADDED_OK);
+
+    // Add Node initial status simulation
+    ResourceStats resource_stats;
+    ResourceID_t res_id = ResourceIDFromString(rtnd_ptr->resource_desc().uuid());
+    ResourceStatus* rs_ptr = FindPtrOrNull(*resource_map_, res_id);
+    if (rs_ptr == NULL || rs_ptr->mutable_descriptor() == NULL) {
+      reply->set_type(NodeReplyType::NODE_NOT_FOUND);
+      return Status::OK;
+    }
+    resource_stats.set_resource_id(rtnd_ptr->resource_desc().uuid());
+    resource_stats.set_timestamp(0);
+    CpuStats* cpu_stats = resource_stats.add_cpus_stats();
+    cpu_stats->set_cpu_capacity(rtnd_ptr->resource_desc().resource_capacity().cpu_cores());
+    // Assuming 80% of cpu/mem is is allocatable neglecting 20% for other processes in node.
+    cpu_stats->set_cpu_allocatable(rtnd_ptr->resource_desc().resource_capacity().cpu_cores()*0.80);
+    //resource_stats.cpus_stats(0).set_cpu_utilization(0.0);
+    //resource_stats.cpus_stats(0).set_cpu_reservation(0.0);
+    resource_stats.set_mem_allocatable(rtnd_ptr->resource_desc().resource_capacity().ram_cap());
+    resource_stats.set_mem_capacity(rtnd_ptr->resource_desc().resource_capacity().ram_cap()*0.80);
+    //resource_stats.set_mem_utilization(0.0);
+    //resource_stats.set_mem_reservation(0.0);
+    resource_stats.set_disk_bw(0);
+    resource_stats.set_net_rx_bw(0);
+    resource_stats.set_net_tx_bw(0);
+    //LOG(INFO) << "DEBUG: During node additions: CPU CAP: " << cpu_stats->cpu_capacity() << "\n"
+    //          << "                              CPU ALLOC: " << cpu_stats->cpu_allocatable() << "\n"
+    //          << "                              MEM CAP: " << resource_stats.mem_capacity() << "\n"
+    //          << "                              MEM ALLOC: " << resource_stats.mem_allocatable();
+    knowledge_base_->AddMachineSample(resource_stats);
     return Status::OK;
   }
 
