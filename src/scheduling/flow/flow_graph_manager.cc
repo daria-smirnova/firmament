@@ -604,8 +604,7 @@ void FlowGraphManager::RemoveUnscheduledAggNode(JobID_t job_id) {
   FlowGraphNode* unsched_agg_node = UnschedAggNodeForJobID(job_id);
   if (unsched_agg_node) {
     CHECK_EQ(job_unsched_to_node_.erase(job_id), 1);
-    graph_change_manager_->DeleteNode(unsched_agg_node, DEL_UNSCHED_JOB_NODE,
-                                      "RemoveUnscheduledAggNode");
+    graph_change_manager_->DeleteNode(unsched_agg_node, DEL_UNSCHED_JOB_NODE, "RemoveUnscheduledAggNode");
   }
 }
 
