@@ -177,7 +177,6 @@ DiskStatistics_t ProcFSMachine::GetDiskStats() {
 }
 
 void ProcFSMachine::GetMachineCapacity(ResourceVector* cap) {
-  int valid_nic_speed = -1;
   // Extract the total available resource capacities on this machine
   MemoryStatistics_t mem_stats = GetMemoryStats();
   cap->set_ram_cap(mem_stats.mem_total / BYTES_TO_KB);
