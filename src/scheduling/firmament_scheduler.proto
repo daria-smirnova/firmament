@@ -28,6 +28,8 @@ service FirmamentScheduler {
 
   rpc AddTaskStats (TaskStats) returns (TaskStatsResponse) {}
   rpc AddNodeStats (ResourceStats) returns (ResourceStatsResponse) {}
+
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
 }
 
 message ScheduleRequest {}
@@ -112,4 +114,18 @@ enum NodeReplyType {
   NODE_UPDATED_OK = 3;
   NODE_NOT_FOUND = 4;
   NODE_ALREADY_EXISTS = 5;
+}
+
+enum ServingStatus {
+  UNKNOWN = 0;
+  SERVING = 1;
+  NOT_SERVING = 2;
+}
+
+message HealthCheckRequest {
+  string grpc_service = 1;
+}
+
+message HealthCheckResponse {
+  ServingStatus status = 1;
 }

@@ -146,7 +146,7 @@ find_package(OpenSSL REQUIRED)
 ExternalProject_Add(
     protobuf3
     GIT_REPOSITORY https://github.com/google/protobuf
-    GIT_TAG v3.1.0
+    GIT_TAG v3.5.1
     TIMEOUT 10
     PREFIX ${CMAKE_CURRENT_BINARY_DIR}/third_party/protobuf3
     CONFIGURE_COMMAND "${CMAKE_COMMAND}"

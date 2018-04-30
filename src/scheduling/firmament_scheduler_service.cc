@@ -469,6 +469,15 @@ class FirmamentSchedulerServiceImpl final :
     return Status::OK;
   }
 
+  Status Check(ServerContext* context,
+	       const HealthCheckRequest* health_service,
+	       HealthCheckResponse* reply) override {
+    if (health_service->grpc_service().empty()) {
+      reply->set_status(ServingStatus::SERVING);
+    }
+    return Status::OK;
+  }
+
  private:
   SchedulerInterface* scheduler_;
   SimulatedMessagingAdapter<BaseMessage>* sim_messaging_adapter_;
