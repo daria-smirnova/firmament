@@ -26,6 +26,128 @@
 namespace firmament {
 namespace scheduler {
 
+size_t HashAffinity(const Affinity& affinity) {
+  size_t seed = 0;
+  LOG(INFO) << "DEBUG: Affinity is set";
+  if (affinity.has_node_affinity()) {
+    LOG(INFO) << "DEBUG: NodeAffinity is set";
+    if (affinity.node_affinity()
+            .has_requiredduringschedulingignoredduringexecution()) {
+      LOG(INFO) << "DEBUG: NodeSelector(requiredduringscheduling) is set";
+      auto node_selector =
+          affinity.node_affinity()
+              .requiredduringschedulingignoredduringexecution();
+      if (node_selector.nodeselectorterms_size()) {
+        LOG(INFO) << "DEBUG: Total number of node Selector terms: "
+                  << (node_selector.nodeselectorterms_size());
+        auto selector_terms = node_selector.nodeselectorterms();
+        for (auto& it : selector_terms) {
+          if (it.matchexpressions_size()) {
+            LOG(INFO) << "DEBUG: Total number of match expressions: "
+                      << it.matchexpressions_size();
+            for (auto& it1 : it.matchexpressions()) {
+              LOG(INFO) << "DEBUG: Key: " << it1.key();
+              LOG(INFO) << "DEBUG: Operator " << it1.operator_();
+              boost::hash_combine(seed, HashString(it1.key()));
+              boost::hash_combine(seed, HashString(it1.operator_()));
+              for (auto& it2 : it1.values()) {
+                LOG(INFO) << "DEBUG: Value " << it2;
+                boost::hash_combine(seed, HashString(it2));
+              }
+            }
+          }
+        }
+      }
+    }
+    // Preferred now
+    if (affinity.node_affinity()
+            .preferredduringschedulingignoredduringexecution_size()) {
+      LOG(INFO) << "DEBUG: preferred duringscheduling is set with size"
+                << affinity.node_affinity()
+                       .preferredduringschedulingignoredduringexecution_size();
+      for (auto& it : affinity.node_affinity()
+                          .preferredduringschedulingignoredduringexecution()) {
+        LOG(INFO) << "DEBUG: Weight" << it.weight();
+        LOG(INFO) << "DEBUG: preferred matchexpressions size: "
+                  << it.preference().matchexpressions_size();
+        for (auto& it1 : it.preference().matchexpressions()) {
+          LOG(INFO) << "DEBUG: Key: " << it1.key();
+          LOG(INFO) << "DEBUG: Operator " << it1.operator_();
+          boost::hash_combine(seed, HashString(it1.key()));
+          boost::hash_combine(seed, HashString(it1.operator_()));
+          for (auto& it2 : it1.values()) {
+            LOG(INFO) << "DEBUG: Value " << it2;
+            boost::hash_combine(seed, HashString(it2));
+          }
+        }
+      }
+    }
+  } else {
+    LOG(INFO) << "DEBUG: NodeAffinity is NOT set";
+  }
+  return seed;
+}
+
+RepeatedPtrField<LabelSelector> NodeSelectorRequirementsAsLabelSelectors(const RepeatedPtrField<NodeSelectorRequirement>& matchExpressions) {
+  TaskDescriptor td;
+  for (auto & nsm : matchExpressions) {
+    LabelSelector selector;
+    selector.set_key(nsm.key());
+    uint64_t type;
+    string operator_type = nsm.operator_();
+    if (operator_type == "In")
+      type = 0;
+    else if (operator_type == "NotIn")
+      type = 1;
+    else if (operator_type == "Exists")
+      type = 2;
+    else if (operator_type == "DoesNotExist")
+      type = 3;
+    selector.set_type(static_cast<LabelSelector_SelectorType>(type));
+    for (auto & value : nsm.values()) {
+      selector.add_values(value);
+    }
+    LabelSelector* label_selector_ptr = td.add_label_selectors();
+    label_selector_ptr->CopyFrom(selector);
+  }
+  return td.label_selectors();
+}
+
+bool SatisfiesMatchExpressions(const ResourceDescriptor& rd, const RepeatedPtrField<NodeSelectorRequirement>& matchExpressions) {
+  const RepeatedPtrField<LabelSelector>& selectors = NodeSelectorRequirementsAsLabelSelectors(matchExpressions);
+  return SatisfiesLabelSelectors(rd, selectors);
+}
+
+bool NodeMatchesNodeSelectorTerms(const ResourceDescriptor& rd, const RepeatedPtrField<NodeSelectorTerm>& nodeSelectorTerms) {
+  for (auto& req : nodeSelectorTerms) {
+    if (req.matchexpressions_size() == 0) {
+      continue;
+    }
+    if (!SatisfiesMatchExpressions(rd, req.matchexpressions())) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+bool SatisfiesAffinity(const ResourceDescriptor& rd, const Affinity& affinity) {
+  bool nodeAffinityMatches = true;
+  if (affinity.has_node_affinity()) {
+   if (affinity.node_affinity().has_requiredduringschedulingignoredduringexecution()) {
+     if (affinity.node_affinity().requiredduringschedulingignoredduringexecution().nodeselectorterms_size()) {
+       // Match node selector for requiredDuringSchedulingIgnoredDuringExecution.
+       auto nodeSelectorTerms = affinity.node_affinity().requiredduringschedulingignoredduringexecution().nodeselectorterms();
+       nodeAffinityMatches = nodeAffinityMatches && NodeMatchesNodeSelectorTerms(rd, nodeSelectorTerms);
+    }
+   } else {
+     // if no required NodeAffinity requirements, will do no-op, means select all nodes.
+     return true;
+   }
+  }
+  return nodeAffinityMatches;
+}
+
 bool SatisfiesLabelSelectors(const ResourceDescriptor& rd,
                              const RepeatedPtrField<LabelSelector>& selectors) {
   unordered_map<string, string> rd_labels;

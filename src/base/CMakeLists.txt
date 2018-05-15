@@ -6,10 +6,12 @@ set(BASE_SRC
   )
 
 set(BASE_PROTOBUFS
+  base/affinity.proto
   base/coco_interference_scores.proto
   base/job_desc.proto
   base/label.proto
   base/label_selector.proto
+  base/node_affinity.proto
   base/reference_desc.proto
   base/resource_desc.proto
   base/resource_stats.proto

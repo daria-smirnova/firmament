@@ -24,14 +24,20 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "base/affinity.pb.h"
 #include "base/common.h"
 #include "base/label.pb.h"
 #include "base/label_selector.pb.h"
 #include "base/resource_desc.pb.h"
+#include "base/task_desc.pb.h"
 
 namespace firmament {
 namespace scheduler {
-
+RepeatedPtrField<LabelSelector> NodeSelectorRequirementsAsLabelSelectors(const NodeSelectorRequirement& matchExpressions);
+bool SatisfiesMatchExpressions(const ResourceDescriptor& rd, const NodeSelectorRequirement& matchExpressions);
+bool NodeMatchesNodeSelectorTerms(const ResourceDescriptor& rd, const NodeSelectorTerm& nodeSelectorTerms);
+size_t HashAffinity(const Affinity& affinity);
+bool SatisfiesAffinity(const ResourceDescriptor& rd, const Affinity& affinity);
 bool SatisfiesLabelSelectors(const ResourceDescriptor& rd,
                              const RepeatedPtrField<LabelSelector>& selectors);
 bool SatisfiesLabelSelector(const ResourceDescriptor& rd,

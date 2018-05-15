@@ -116,6 +116,15 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(
   int64_t cpu_cost = ((rd.resource_capacity().cpu_cores() - available_resources.cpu_cores_) / rd.resource_capacity().cpu_cores()) * 1000;
   int64_t ram_cost = ((rd.resource_capacity().ram_cap() - available_resources.ram_cap_) / rd.resource_capacity().ram_cap()) * 1000;
   int64_t cost = cpu_cost + ram_cost;
+  const Affinity* affinity = FindOrNull(ec_to_affinity, ec1);
+  if (affinity) {
+    if (affinity->has_node_affinity()) {
+      if (affinity->node_affinity().preferredduringschedulingignoredduringexecution_size()) {
+        // TODO(Jagadish): We need to decrease the cost upto weight of match expressions which were satisifed by machine.
+        // Do label matching here itself for getting preferred machine score and reduce the cost.
+      }
+    }
+  } 
   return ArcDescriptor(cost, 1ULL, 0ULL);
 }
 
@@ -126,13 +135,20 @@ vector<EquivClass_t>* CpuCostModel::GetTaskEquivClasses(TaskID_t task_id) {
   CHECK_NOTNULL(td_ptr);
   CostVector_t* task_resource_request = FindOrNull(task_resource_requirement_, task_id);
   CHECK_NOTNULL(task_resource_request);
-  size_t resource_req_selectors_hash = scheduler::HashSelectors(td_ptr->label_selectors());
-  boost::hash_combine(resource_req_selectors_hash, task_resource_request->cpu_cores_);
-  EquivClass_t resource_request_ec = static_cast<EquivClass_t>(resource_req_selectors_hash);
+  size_t resource_req_affinity_hash = 0;
+  if (td_ptr->has_affinity()) { 
+    resource_req_affinity_hash = scheduler::HashAffinity(td_ptr->affinity());
+  }
+  boost::hash_combine(resource_req_affinity_hash,
+                      to_string(task_resource_request->cpu_cores_) + "cpumem" +
+                      to_string(task_resource_request->ram_cap_));
+  EquivClass_t resource_request_ec = static_cast<EquivClass_t>(resource_req_affinity_hash);
   ecs->push_back(resource_request_ec);
   InsertIfNotPresent(&ec_resource_requirement_, resource_request_ec, *task_resource_request);
-  InsertIfNotPresent(&ec_to_label_selectors, resource_request_ec, 
-                     td_ptr->label_selectors());
+  if (td_ptr->has_affinity()) {
+    InsertIfNotPresent(&ec_to_affinity, resource_request_ec, 
+                     td_ptr->affinity());
+  }
   return ecs;
 }
 
@@ -156,15 +172,17 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
   vector<EquivClass_t>* pref_ecs = new vector<EquivClass_t>();
   CostVector_t* task_resource_request = FindOrNull(ec_resource_requirement_, ec);
   if (task_resource_request) {
-    const RepeatedPtrField<LabelSelector>* label_selectors =
-      FindOrNull(ec_to_label_selectors, ec);
-    CHECK_NOTNULL(label_selectors);
     for (auto& ec_machines : ecs_for_machines_) {
       ResourceStatus* rs = FindPtrOrNull(*resource_map_, ec_machines.first);
       CHECK_NOTNULL(rs);
       const ResourceDescriptor& rd = rs->topology_node().resource_desc();
-      if (!scheduler::SatisfiesLabelSelectors(rd, *label_selectors))
-        continue;
+      const Affinity* affinity = FindOrNull(ec_to_affinity, ec);
+      if (affinity) {
+        // TODO(Jagadish): We need to check whether current machine satisfies hard constraint or not.
+        // So hard constraint is considered here and soft contraint is considered in calculating the cost.
+        if (!scheduler::SatisfiesAffinity(rd, *affinity))
+          continue;
+      }
       CostVector_t available_resources;
       available_resources.cpu_cores_ = static_cast<uint32_t>(rd.available_resources().cpu_cores());
       available_resources.ram_cap_ = static_cast<uint32_t>(rd.available_resources().ram_cap());
@@ -268,7 +286,7 @@ FlowGraphNode* CpuCostModel::GatherStats(FlowGraphNode* accumulator,
                                                 &latest_stats);
     if (have_sample) {
       //LOG(INFO) << "DEBUG: Size of cpu stats: " << latest_stats.cpus_stats_size();
-      uint32_t core_id = 0;
+      //uint32_t core_id = 0;
       float available_cpu_cores = latest_stats.cpus_stats(0).cpu_allocatable();
        // latest_stats.cpus_stats(core_id).cpu_capacity() *
        // (1.0 - latest_stats.cpus_stats(core_id).cpu_utilization());

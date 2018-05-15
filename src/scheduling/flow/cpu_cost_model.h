@@ -97,6 +97,8 @@ class CpuCostModel : public CostModelInterface {
   unordered_map<EquivClass_t, uint64_t> ec_to_index_;
   unordered_map<EquivClass_t, const RepeatedPtrField<LabelSelector>>
     ec_to_label_selectors;
+  unordered_map<EquivClass_t, const Affinity>
+    ec_to_affinity;
 };
 
 }  // namespace firmament

@@ -12,6 +12,7 @@ import "base/label_selector.proto";
 import "base/reference_desc.proto";
 import "base/resource_vector.proto";
 import "base/task_final_report.proto";
+import "base/affinity.proto";
 
 message TaskDescriptor {
   enum TaskState {
@@ -86,4 +87,6 @@ message TaskDescriptor {
   repeated Label labels = 32;
   /* Resource label selectors */
   repeated LabelSelector label_selectors = 33;
+  /* Affinity */
+  Affinity affinity = 34;
 }
