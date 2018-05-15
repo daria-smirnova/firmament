@@ -26,68 +26,6 @@
 namespace firmament {
 namespace scheduler {
 
-size_t HashAffinity(const Affinity& affinity) {
-  size_t seed = 0;
-  LOG(INFO) << "DEBUG: Affinity is set";
-  if (affinity.has_node_affinity()) {
-    LOG(INFO) << "DEBUG: NodeAffinity is set";
-    if (affinity.node_affinity()
-            .has_requiredduringschedulingignoredduringexecution()) {
-      LOG(INFO) << "DEBUG: NodeSelector(requiredduringscheduling) is set";
-      auto node_selector =
-          affinity.node_affinity()
-              .requiredduringschedulingignoredduringexecution();
-      if (node_selector.nodeselectorterms_size()) {
-        LOG(INFO) << "DEBUG: Total number of node Selector terms: "
-                  << (node_selector.nodeselectorterms_size());
-        auto selector_terms = node_selector.nodeselectorterms();
-        for (auto& it : selector_terms) {
-          if (it.matchexpressions_size()) {
-            LOG(INFO) << "DEBUG: Total number of match expressions: "
-                      << it.matchexpressions_size();
-            for (auto& it1 : it.matchexpressions()) {
-              LOG(INFO) << "DEBUG: Key: " << it1.key();
-              LOG(INFO) << "DEBUG: Operator " << it1.operator_();
-              boost::hash_combine(seed, HashString(it1.key()));
-              boost::hash_combine(seed, HashString(it1.operator_()));
-              for (auto& it2 : it1.values()) {
-                LOG(INFO) << "DEBUG: Value " << it2;
-                boost::hash_combine(seed, HashString(it2));
-              }
-            }
-          }
-        }
-      }
-    }
-    // Preferred now
-    if (affinity.node_affinity()
-            .preferredduringschedulingignoredduringexecution_size()) {
-      LOG(INFO) << "DEBUG: preferred duringscheduling is set with size"
-                << affinity.node_affinity()
-                       .preferredduringschedulingignoredduringexecution_size();
-      for (auto& it : affinity.node_affinity()
-                          .preferredduringschedulingignoredduringexecution()) {
-        LOG(INFO) << "DEBUG: Weight" << it.weight();
-        LOG(INFO) << "DEBUG: preferred matchexpressions size: "
-                  << it.preference().matchexpressions_size();
-        for (auto& it1 : it.preference().matchexpressions()) {
-          LOG(INFO) << "DEBUG: Key: " << it1.key();
-          LOG(INFO) << "DEBUG: Operator " << it1.operator_();
-          boost::hash_combine(seed, HashString(it1.key()));
-          boost::hash_combine(seed, HashString(it1.operator_()));
-          for (auto& it2 : it1.values()) {
-            LOG(INFO) << "DEBUG: Value " << it2;
-            boost::hash_combine(seed, HashString(it2));
-          }
-        }
-      }
-    }
-  } else {
-    LOG(INFO) << "DEBUG: NodeAffinity is NOT set";
-  }
-  return seed;
-}
-
 RepeatedPtrField<LabelSelector> NodeSelectorRequirementsAsLabelSelectors(const RepeatedPtrField<NodeSelectorRequirement>& matchExpressions) {
   TaskDescriptor td;
   for (auto & nsm : matchExpressions) {
@@ -116,6 +54,14 @@ RepeatedPtrField<LabelSelector> NodeSelectorRequirementsAsLabelSelectors(const R
 bool SatisfiesMatchExpressions(const ResourceDescriptor& rd, const RepeatedPtrField<NodeSelectorRequirement>& matchExpressions) {
   const RepeatedPtrField<LabelSelector>& selectors = NodeSelectorRequirementsAsLabelSelectors(matchExpressions);
   return SatisfiesLabelSelectors(rd, selectors);
+}
+
+bool NodeMatchesNodeSelectorTerm(const ResourceDescriptor& rd, const NodeSelectorTerm& nodeSelectorTerm) {
+ if (nodeSelectorTerm.matchexpressions_size() == 0) {
+      return false;
+ } else {
+    return SatisfiesMatchExpressions(rd, nodeSelectorTerm.matchexpressions());
+ }
 }
 
 bool NodeMatchesNodeSelectorTerms(const ResourceDescriptor& rd, const RepeatedPtrField<NodeSelectorTerm>& nodeSelectorTerms) {

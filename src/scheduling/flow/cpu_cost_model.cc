@@ -117,15 +117,31 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(
   int64_t ram_cost = ((rd.resource_capacity().ram_cap() - available_resources.ram_cap_) / rd.resource_capacity().ram_cap()) * 1000;
   int64_t cost = cpu_cost + ram_cost;
   const Affinity* affinity = FindOrNull(ec_to_affinity, ec1);
+  int64_t sum_of_weights = 0;
   if (affinity) {
     if (affinity->has_node_affinity()) {
       if (affinity->node_affinity().preferredduringschedulingignoredduringexecution_size()) {
-        // TODO(Jagadish): We need to decrease the cost upto weight of match expressions which were satisifed by machine.
-        // Do label matching here itself for getting preferred machine score and reduce the cost.
+        // Match PreferredDuringSchedulingIgnoredDuringExecution term by term
+        for (auto & preferredSchedulingTerm : affinity->node_affinity().preferredduringschedulingignoredduringexecution() ) {
+          // If weight is zero then skip preferredSchedulingTerm.
+          if (!preferredSchedulingTerm.weight()) {
+            continue;
+          }
+          // A null or empty node selector term matches no objects.
+          if (!preferredSchedulingTerm.has_preference()) {
+            continue;
+          }
+          if (scheduler::NodeMatchesNodeSelectorTerm(rd, preferredSchedulingTerm.preference())) {
+            sum_of_weights += preferredSchedulingTerm.weight();
+          }
+        }
       }
     }
   } 
-  return ArcDescriptor(cost, 1ULL, 0ULL);
+  // TODO(Jagadish): We need to ensure cost is positive, come up with efficient formula.
+  // Currently we decrease the over all cost by total sum of weights to keep cost inversely 
+  // proportional to sum of weights.
+  return ArcDescriptor(cost + max_sum_of_weights - sum_of_weights, 1ULL, 0ULL);
 }
 
 vector<EquivClass_t>* CpuCostModel::GetTaskEquivClasses(TaskID_t task_id) {
@@ -135,14 +151,18 @@ vector<EquivClass_t>* CpuCostModel::GetTaskEquivClasses(TaskID_t task_id) {
   CHECK_NOTNULL(td_ptr);
   CostVector_t* task_resource_request = FindOrNull(task_resource_requirement_, task_id);
   CHECK_NOTNULL(task_resource_request);
-  size_t resource_req_affinity_hash = 0;
-  if (td_ptr->has_affinity()) { 
-    resource_req_affinity_hash = scheduler::HashAffinity(td_ptr->affinity());
-  }
-  boost::hash_combine(resource_req_affinity_hash,
+  size_t task_agg = 0;
+  if (td_ptr->has_affinity()) {
+    // For tasks which has affinity requirements, we hash the job id.
+    // TODO(Jagadish): This hash has to be handled in an efficient way in future.
+    task_agg = HashJobID(*td_ptr);
+  } else {
+    // For other tasks, hash the cpu and mem requests.
+    boost::hash_combine(task_agg,
                       to_string(task_resource_request->cpu_cores_) + "cpumem" +
                       to_string(task_resource_request->ram_cap_));
-  EquivClass_t resource_request_ec = static_cast<EquivClass_t>(resource_req_affinity_hash);
+  }
+  EquivClass_t resource_request_ec = static_cast<EquivClass_t>(task_agg);
   ecs->push_back(resource_request_ec);
   InsertIfNotPresent(&ec_resource_requirement_, resource_request_ec, *task_resource_request);
   if (td_ptr->has_affinity()) {
@@ -178,17 +198,13 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
       const ResourceDescriptor& rd = rs->topology_node().resource_desc();
       const Affinity* affinity = FindOrNull(ec_to_affinity, ec);
       if (affinity) {
-        // TODO(Jagadish): We need to check whether current machine satisfies hard constraint or not.
-        // So hard constraint is considered here and soft contraint is considered in calculating the cost.
+        // Checking whether machine satisfies affinity requirements.
         if (!scheduler::SatisfiesAffinity(rd, *affinity))
           continue;
       }
       CostVector_t available_resources;
       available_resources.cpu_cores_ = static_cast<uint32_t>(rd.available_resources().cpu_cores());
       available_resources.ram_cap_ = static_cast<uint32_t>(rd.available_resources().ram_cap());
-      //LOG(INFO) << "Available resources before selecting machine ECs: "
-      //          << "Cores: " << available_resources.cpu_cores_ << ", "
-      //          << "Memory: " << available_resources.ram_cap_;
       ResourceID_t res_id = ResourceIDFromString(rd.uuid());
       vector<EquivClass_t>* ecs_for_machine =
         FindOrNull(ecs_for_machines_, res_id);
@@ -202,7 +218,6 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
       }
     }
   }
-  //LOG(INFO) << "No. of preferred ecs: " << pref_ecs->size();
   return pref_ecs;
 }
 
@@ -220,7 +235,6 @@ void CpuCostModel::AddMachine(
     CHECK(InsertIfNotPresent(&ec_to_index_, multi_machine_ec, index));
     CHECK(InsertIfNotPresent(&ec_to_machine_, multi_machine_ec, res_id));
   }
-  //LOG(INFO) << "DEBUG: Size of machine ECs for res: " << machine_ecs.size() << " for " << rd.friendly_name();
   CHECK(InsertIfNotPresent(&ecs_for_machines_, res_id, machine_ecs));
 }
 
@@ -229,8 +243,6 @@ void CpuCostModel::AddTask(TaskID_t task_id) {
   CostVector_t resource_request;
   resource_request.cpu_cores_ = static_cast<uint32_t>(td.resource_request().cpu_cores());
   resource_request.ram_cap_ = static_cast<uint32_t>(td.resource_request().ram_cap());
-  //LOG(INFO) << "Requested cpu cores at AddTask: " << resource_request.cpu_cores_;
-  //LOG(INFO) << "Requested mem at AddTask: " << resource_request.ram_cap_;
   CHECK(InsertIfNotPresent(&task_resource_requirement_, task_id,
                            resource_request));
 }

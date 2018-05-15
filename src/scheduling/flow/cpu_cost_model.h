@@ -72,6 +72,9 @@ class CpuCostModel : public CostModelInterface {
   FlowGraphNode* UpdateStats(FlowGraphNode* accumulator, FlowGraphNode* other);
 
  private:
+  // Fixed value for OMEGA, the normalization ceiling for each dimension's cost
+  // value
+  const Cost_t max_sum_of_weights = 1000;
   EquivClass_t GetMachineEC(const string& machine_name, uint64_t ec_index);
   ResourceID_t MachineResIDForResource(ResourceID_t res_id);
   inline const TaskDescriptor& GetTask(TaskID_t task_id) {
