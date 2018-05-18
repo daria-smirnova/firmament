@@ -33,11 +33,16 @@
 
 namespace firmament {
 namespace scheduler {
-RepeatedPtrField<LabelSelector> NodeSelectorRequirementsAsLabelSelectors(const NodeSelectorRequirement& matchExpressions);
-bool SatisfiesMatchExpressions(const ResourceDescriptor& rd, const NodeSelectorRequirement& matchExpressions);
-bool NodeMatchesNodeSelectorTerm(const ResourceDescriptor& rd, const NodeSelectorTerm& nodeSelectorTerm);
-bool NodeMatchesNodeSelectorTerms(const ResourceDescriptor& rd, const  RepeatedPtrField<NodeSelectorTerm>& nodeSelectorTerms);
-bool SatisfiesAffinity(const ResourceDescriptor& rd, const Affinity& affinity);
+RepeatedPtrField<LabelSelector> NodeSelectorRequirementsAsLabelSelectors(
+    const NodeSelectorRequirement& matchExpressions);
+bool SatisfiesMatchExpressions(const ResourceDescriptor& rd,
+                               const NodeSelectorRequirement& matchExpressions);
+bool NodeMatchesNodeSelectorTerm(const ResourceDescriptor& rd,
+                                 const NodeSelectorTerm& nodeSelectorTerm);
+bool NodeMatchesNodeSelectorTerms(
+    const ResourceDescriptor& rd,
+    const RepeatedPtrField<NodeSelectorTerm>& nodeSelectorTerms);
+bool SatisfiesNodeSelectorAndNodeAffinity(const ResourceDescriptor& rd, const TaskDescriptor& td);
 bool SatisfiesLabelSelectors(const ResourceDescriptor& rd,
                              const RepeatedPtrField<LabelSelector>& selectors);
 bool SatisfiesLabelSelector(const ResourceDescriptor& rd,
