@@ -19,8 +19,6 @@
  */
 
 #include "scheduling/flow/cpu_cost_model.h"
-#include "scheduling/flow/coco_cost_model.h"
-
 #include "base/common.h"
 #include "base/types.h"
 #include "base/units.h"
@@ -68,12 +66,12 @@ ArcDescriptor CpuCostModel::LeafResourceNodeToSink(ResourceID_t resource_id) {
 }
 
 ArcDescriptor CpuCostModel::TaskContinuation(TaskID_t task_id) {
-  // TODO(ionel): Implement before running with preemption enabled.
+  // TODO(shivramsrivastava): Implement before running with preemption enabled.
   return ArcDescriptor(0LL, 1ULL, 0ULL);
 }
 
 ArcDescriptor CpuCostModel::TaskPreemption(TaskID_t task_id) {
-  // TODO(ionel): Implement before running with preemption enabled.
+  // TODO(shivramsrivastava): Implement before running with preemption enabled.
   return ArcDescriptor(0LL, 1ULL, 0ULL);
 }
 
@@ -90,7 +88,7 @@ ArcDescriptor CpuCostModel::EquivClassToResourceNode(EquivClass_t ec,
 
 ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
                                                    EquivClass_t ec2) {
-  CostVector_t* resource_request = FindOrNull(ec_resource_requirement_, ec1);
+  CpuMemCostVector_t* resource_request = FindOrNull(ec_resource_requirement_, ec1);
   CHECK_NOTNULL(resource_request);
   ResourceID_t* machine_res_id = FindOrNull(ec_to_machine_, ec2);
   CHECK_NOTNULL(machine_res_id);
@@ -98,11 +96,11 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
   CHECK_NOTNULL(rs);
   const ResourceDescriptor& rd = rs->topology_node().resource_desc();
   CHECK_EQ(rd.type(), ResourceDescriptor::RESOURCE_MACHINE);
-  CostVector_t available_resources;
+  CpuMemCostVector_t available_resources;
   available_resources.cpu_cores_ =
-      static_cast<uint32_t>(rd.available_resources().cpu_cores());
+      static_cast<uint64_t>(rd.available_resources().cpu_cores());
   available_resources.ram_cap_ =
-      static_cast<uint32_t>(rd.available_resources().ram_cap());
+      static_cast<uint64_t>(rd.available_resources().ram_cap());
   uint64_t* index = FindOrNull(ec_to_index_, ec2);
   CHECK_NOTNULL(index);
   uint64_t ec_index = *index;
@@ -117,12 +115,12 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
                                  ec_index * resource_request->ram_cap_;
   int64_t cpu_cost =
       ((rd.resource_capacity().cpu_cores() - available_resources.cpu_cores_) /
-       rd.resource_capacity().cpu_cores()) *
-      1000;
+       (float)rd.resource_capacity().cpu_cores()) *
+      omega_;
   int64_t ram_cost =
       ((rd.resource_capacity().ram_cap() - available_resources.ram_cap_) /
-       rd.resource_capacity().ram_cap()) *
-      1000;
+       (float)rd.resource_capacity().ram_cap()) *
+      omega_;
   int64_t cost = cpu_cost + ram_cost;
   const TaskDescriptor* td_ptr = FindOrNull(ec_to_td_requirements, ec1);
   CHECK_NOTNULL(td_ptr);
@@ -152,6 +150,11 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
       }
     }
   }
+  // TODO(jagadish): We need to tune max_sum_of_weights to max possible value
+  // with the help of real time node affinty soft constraints requirements.
+  if (sum_of_weights > max_sum_of_weights) {
+    sum_of_weights = max_sum_of_weights;
+  }
   return ArcDescriptor(cost + max_sum_of_weights - sum_of_weights, 1ULL, 0ULL);
 }
 
@@ -160,13 +163,13 @@ vector<EquivClass_t>* CpuCostModel::GetTaskEquivClasses(TaskID_t task_id) {
   vector<EquivClass_t>* ecs = new vector<EquivClass_t>();
   TaskDescriptor* td_ptr = FindPtrOrNull(*task_map_, task_id);
   CHECK_NOTNULL(td_ptr);
-  CostVector_t* task_resource_request =
+  CpuMemCostVector_t* task_resource_request =
       FindOrNull(task_resource_requirement_, task_id);
   CHECK_NOTNULL(task_resource_request);
   size_t task_agg = 0;
   if (td_ptr->has_affinity()) {
     // For tasks which has affinity requirements, we hash the job id.
-    // TODO(Jagadish): This hash has to be handled in an efficient way in
+    // TODO(jagadish): This hash has to be handled in an efficient way in
     // future.
     task_agg = HashJobID(*td_ptr);
   } else if (td_ptr->label_selectors_size()) {
@@ -208,7 +211,7 @@ vector<ResourceID_t>* CpuCostModel::GetTaskPreferenceArcs(TaskID_t task_id) {
 vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
     EquivClass_t ec) {
   vector<EquivClass_t>* pref_ecs = new vector<EquivClass_t>();
-  CostVector_t* task_resource_request =
+  CpuMemCostVector_t* task_resource_request =
       FindOrNull(ec_resource_requirement_, ec);
   if (task_resource_request) {
     for (auto& ec_machines : ecs_for_machines_) {
@@ -220,17 +223,17 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
         // Checking whether machine satisfies node selectot and node affinity.
         if (!scheduler::SatisfiesNodeSelectorAndNodeAffinity(rd, *td_ptr)) continue;
       }
-      CostVector_t available_resources;
+      CpuMemCostVector_t available_resources;
       available_resources.cpu_cores_ =
-          static_cast<uint32_t>(rd.available_resources().cpu_cores());
+          static_cast<uint64_t>(rd.available_resources().cpu_cores());
       available_resources.ram_cap_ =
-          static_cast<uint32_t>(rd.available_resources().ram_cap());
+          static_cast<uint64_t>(rd.available_resources().ram_cap());
       ResourceID_t res_id = ResourceIDFromString(rd.uuid());
       vector<EquivClass_t>* ecs_for_machine =
           FindOrNull(ecs_for_machines_, res_id);
       CHECK_NOTNULL(ecs_for_machine);
       uint64_t index = 0;
-      CostVector_t cur_resource;
+      CpuMemCostVector_t cur_resource;
       for (cur_resource = *task_resource_request;
            cur_resource.cpu_cores_ <= available_resources.cpu_cores_ &&
            cur_resource.ram_cap_ <= available_resources.ram_cap_ &&
@@ -262,23 +265,23 @@ void CpuCostModel::AddMachine(ResourceTopologyNodeDescriptor* rtnd_ptr) {
 
 void CpuCostModel::AddTask(TaskID_t task_id) {
   const TaskDescriptor& td = GetTask(task_id);
-  CostVector_t resource_request;
+  CpuMemCostVector_t resource_request;
   resource_request.cpu_cores_ =
-      static_cast<uint32_t>(td.resource_request().cpu_cores());
-  resource_request.ram_cap_ =
-      static_cast<uint32_t>(td.resource_request().ram_cap());
+      static_cast<uint64_t>(td.resource_request().cpu_cores());
+  resource_request.ram_cap_ = 
+      static_cast<uint64_t>(td.resource_request().ram_cap());
   CHECK(InsertIfNotPresent(&task_resource_requirement_, task_id,
                            resource_request));
 }
 
 void CpuCostModel::RemoveMachine(ResourceID_t res_id) {
-  // vector<EquivClass_t>* ecs = FindOrNull(ecs_for_machines_, res_id);
-  // CHECK_NOTNULL(ecs);
-  // for (EquivClass_t& ec : *ecs) {
-  //   CHECK_EQ(ec_to_machine_.erase(ec), 1);
-  //   CHECK_EQ(ec_to_index_.erase(ec), 1);
-  // }
-  // CHECK_EQ(ecs_for_machines_.erase(res_id), 1);
+  vector<EquivClass_t>* ecs = FindOrNull(ecs_for_machines_, res_id);
+  CHECK_NOTNULL(ecs);
+  for (EquivClass_t& ec : *ecs) {
+    CHECK_EQ(ec_to_machine_.erase(ec), 1);
+    CHECK_EQ(ec_to_index_.erase(ec), 1);
+  }
+  CHECK_EQ(ecs_for_machines_.erase(res_id), 1);
 }
 
 void CpuCostModel::RemoveTask(TaskID_t task_id) {

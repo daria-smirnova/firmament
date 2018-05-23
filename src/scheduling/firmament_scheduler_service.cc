@@ -229,66 +229,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
                        TaskSubmittedResponse* reply) override {
     boost::lock_guard<boost::recursive_mutex> lock(
         scheduler_->scheduling_lock_);
-    // Test node affinity
-    TaskDescriptor test_td = task_desc_ptr->task_descriptor();
-    if (test_td.has_affinity()) {
-      LOG(INFO) << "DEBUG: Affinity is set";
-      if (test_td.affinity().has_node_affinity()) {
-        LOG(INFO) << "DEBUG: NodeAffinity is set";
-        if (test_td.affinity()
-                .node_affinity()
-                .has_requiredduringschedulingignoredduringexecution()) {
-          LOG(INFO) << "DEBUG: NodeSelector(requiredduringscheduling) is set";
-          auto node_selector =
-              test_td.affinity()
-                  .node_affinity()
-                  .requiredduringschedulingignoredduringexecution();
-          if (node_selector.nodeselectorterms_size()) {
-            LOG(INFO) << "DEBUG: Total number of node Selector terms: "
-                      << (node_selector.nodeselectorterms_size());
-            auto selector_terms = node_selector.nodeselectorterms();
-            for (auto& it : selector_terms) {
-              if (it.matchexpressions_size()) {
-                LOG(INFO) << "DEBUG: Total number of match expressions: "
-                          << it.matchexpressions_size();
-                for (auto& it1 : it.matchexpressions()) {
-                  LOG(INFO) << "DEBUG: Key: " << it1.key();
-                  LOG(INFO) << "DEBUG: Operator " << it1.operator_();
-                  for (auto& it2 : it1.values()) {
-                    LOG(INFO) << "DEBUG: Value " << it2;
-                  }
-                }
-              }
-            }
-          }
-        }
-        // Preferred now
-        if (test_td.affinity()
-                .node_affinity()
-                .preferredduringschedulingignoredduringexecution_size()) {
-          LOG(INFO) << "DEBUG: preferred duringscheduling is set with size" << test_td.affinity().node_affinity().preferredduringschedulingignoredduringexecution_size();
-          for (auto& it :
-               test_td.affinity()
-                   .node_affinity()
-                   .preferredduringschedulingignoredduringexecution()) {
-            LOG(INFO) << "DEBUG: Weight" << it.weight();
-            LOG(INFO) << "DEBUG: preferred matchexpressions size: " << it.preference().matchexpressions_size();
-            for (auto& it1 : it.preference().matchexpressions()) {
-              LOG(INFO) << "DEBUG: Key: " << it1.key();
-              LOG(INFO) << "DEBUG: Operator " << it1.operator_();
-              for (auto& it2 : it1.values()) {
-                LOG(INFO) << "DEBUG: Value " << it2;
-              }
-            }
-          }
-        }
-      } else {
-        LOG(INFO) << "DEBUG: NodeAffinity is NOT set";
-      }
-    } else {
-      LOG(INFO) << "DEBUG: Affinity is NOT set";
-    }
-
     TaskID_t task_id = task_desc_ptr->task_descriptor().uid();
     if (FindPtrOrNull(*task_map_, task_id)) {
       reply->set_type(TaskReplyType::TASK_ALREADY_SUBMITTED);

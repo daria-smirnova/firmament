@@ -30,11 +30,15 @@
 #include "base/types.h"
 #include "misc/map-util.h"
 #include "scheduling/common.h"
-#include "scheduling/flow/coco_cost_model.h"
 #include "scheduling/flow/cost_model_interface.h"
 #include "scheduling/knowledge_base.h"
 
 namespace firmament {
+
+typedef struct CpuMemCostVector {
+  uint64_t cpu_cores_;
+  uint64_t ram_cap_;
+} CpuMemCostVector_t;
 
 class CpuCostModel : public CostModelInterface {
  public:
@@ -71,7 +75,18 @@ class CpuCostModel : public CostModelInterface {
   FlowGraphNode* UpdateStats(FlowGraphNode* accumulator, FlowGraphNode* other);
 
  private:
-  // TODO(Jagadish): Fixed value of some big positive number which needs to added to cost to keep cost
+  // Fixed value for OMEGA, the normalization ceiling for each dimension's cost
+  // value
+  const Cost_t omega_ = 1000;
+  FRIEND_TEST(CpuCostModelTest, AddMachine);
+  FRIEND_TEST(CpuCostModelTest, AddTask);
+  FRIEND_TEST(CpuCostModelTest, EquivClassToEquivClass);
+  FRIEND_TEST(CpuCostModelTest, GetEquivClassToEquivClassesArcs);
+  FRIEND_TEST(CpuCostModelTest, GatherStats);
+  FRIEND_TEST(CpuCostModelTest, GetOutgoingEquivClassPrefArcs);
+  FRIEND_TEST(CpuCostModelTest, GetTaskEquivClasses);
+  FRIEND_TEST(CpuCostModelTest, MachineResIDForResource);
+  // TODO(jagadish): Fixed value of some big positive number which needs to added to cost to keep cost
   // positive. We need to come up with correct formula in future.
   const Cost_t max_sum_of_weights = 1000;
   EquivClass_t GetMachineEC(const string& machine_name, uint64_t ec_index);
@@ -89,10 +104,10 @@ class CpuCostModel : public CostModelInterface {
   shared_ptr<KnowledgeBase> knowledge_base_;
   unordered_map<TaskID_t, float> task_cpu_cores_requirement_;
   unordered_map<TaskID_t, uint64_t> task_rx_bw_requirement_;
-  unordered_map<TaskID_t, CostVector_t> task_resource_requirement_;
+  unordered_map<TaskID_t, CpuMemCostVector_t> task_resource_requirement_;
   unordered_map<EquivClass_t, float> ec_cpu_cores_requirement_;
   unordered_map<EquivClass_t, uint64_t> ec_rx_bw_requirement_;
-  unordered_map<EquivClass_t, CostVector_t> ec_resource_requirement_;
+  unordered_map<EquivClass_t, CpuMemCostVector_t> ec_resource_requirement_;
   unordered_map<ResourceID_t, vector<EquivClass_t>, boost::hash<ResourceID_t>>
       ecs_for_machines_;
   unordered_map<EquivClass_t, ResourceID_t> ec_to_machine_;
