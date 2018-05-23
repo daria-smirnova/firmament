@@ -114,6 +114,25 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     // TODO(ionel): Implement!
   }
 
+  void UpdateMachineSamplesToKnowledgeBaseStatically(const TaskDescriptor* td_ptr, bool add) {
+    ResourceID_t res_id = ResourceIDFromString(td_ptr->scheduled_to_resource());
+    ResourceStatus* rs = FindPtrOrNull(*resource_map_, res_id);
+    ResourceStats resource_stats;
+    CpuStats* cpu_stats = resource_stats.add_cpus_stats();
+    bool have_sample =
+      knowledge_base_->GetLatestStatsForMachine(ResourceIDFromString(rs->mutable_topology_node()->parent_id()), &resource_stats);
+    if (have_sample) {
+      if (add) {
+        cpu_stats->set_cpu_allocatable(cpu_stats->cpu_allocatable() + td_ptr->resource_request().cpu_cores());
+        resource_stats.set_mem_allocatable(resource_stats.mem_allocatable() + td_ptr->resource_request().ram_cap());
+      } else {
+        cpu_stats->set_cpu_allocatable(cpu_stats->cpu_allocatable() - td_ptr->resource_request().cpu_cores());
+        resource_stats.set_mem_allocatable(resource_stats.mem_allocatable() - td_ptr->resource_request().ram_cap());
+      }
+      knowledge_base_->AddMachineSample(resource_stats);
+    }
+  }
+
   Status Schedule(ServerContext* context, const ScheduleRequest* request,
                   SchedulingDeltas* reply) override {
     SchedulerStats sstat;
@@ -150,6 +169,12 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       reply->set_type(TaskReplyType::TASK_NOT_FOUND);
       return Status::OK;
     }
+    // TODO(jagadish): We need to remove below code once we start
+    // getting machine resource stats samples from poseidon i.e., heapster.
+    // Currently updating machine samples statically based on state of pod.
+    if (!td_ptr->scheduled_to_resource().empty()) {
+      UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
+    }
     JobID_t job_id = JobIDFromString(td_ptr->job_id());
     JobDescriptor* jd_ptr = FindOrNull(*job_map_, job_id);
     if (jd_ptr == NULL) {
@@ -181,6 +206,12 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       reply->set_type(TaskReplyType::TASK_NOT_FOUND);
       return Status::OK;
     }
+    // TODO(jagadish): We need to remove below code once we start
+    // getting machine resource stats samples from poseidon i.e., heapster.
+    // Currently updating machine samples statically based on state of pod.
+    if (!td_ptr->scheduled_to_resource().empty()) {
+      UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
+    }
     scheduler_->HandleTaskFailure(td_ptr);
     reply->set_type(TaskReplyType::TASK_FAILED_OK);
     return Status::OK;
@@ -194,6 +225,12 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     if (td_ptr == NULL) {
       reply->set_type(TaskReplyType::TASK_NOT_FOUND);
       return Status::OK;
+    }
+    // TODO(jagadish): We need to remove below code once we start
+    // getting machine resource stats samples from poseidon i.e., heapster.
+    // Currently updating machine samples statically based on state of pod.
+    if (!td_ptr->scheduled_to_resource().empty()) {
+      UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
     }
     scheduler_->HandleTaskRemoval(td_ptr);
     JobID_t job_id = JobIDFromString(td_ptr->job_id());
