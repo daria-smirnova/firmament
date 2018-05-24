@@ -34,9 +34,9 @@
 namespace firmament {
 namespace scheduler {
 RepeatedPtrField<LabelSelector> NodeSelectorRequirementsAsLabelSelectors(
-    const NodeSelectorRequirement& matchExpressions);
+    const RepeatedPtrField<NodeSelectorRequirement>& matchExpressions);
 bool SatisfiesMatchExpressions(const ResourceDescriptor& rd,
-                               const NodeSelectorRequirement& matchExpressions);
+                               const RepeatedPtrField<NodeSelectorRequirement>& matchExpressions);
 bool NodeMatchesNodeSelectorTerm(const ResourceDescriptor& rd,
                                  const NodeSelectorTerm& nodeSelectorTerm);
 bool NodeMatchesNodeSelectorTerms(
