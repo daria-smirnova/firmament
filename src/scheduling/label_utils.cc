@@ -26,6 +26,97 @@
 namespace firmament {
 namespace scheduler {
 
+RepeatedPtrField<LabelSelector> NodeSelectorRequirementsAsLabelSelectors(
+    const RepeatedPtrField<NodeSelectorRequirement>& matchExpressions) {
+  TaskDescriptor td;
+  for (auto& nsm : matchExpressions) {
+    LabelSelector selector;
+    selector.set_key(nsm.key());
+    uint64_t type = 0;
+    string operator_type = nsm.operator_();
+    if (operator_type == "In")
+      type = 0;
+    else if (operator_type == "NotIn")
+      type = 1;
+    else if (operator_type == "Exists")
+      type = 2;
+    else if (operator_type == "DoesNotExist")
+      type = 3;
+    selector.set_type(static_cast<LabelSelector_SelectorType>(type));
+    for (auto& value : nsm.values()) {
+      selector.add_values(value);
+    }
+    LabelSelector* label_selector_ptr = td.add_label_selectors();
+    label_selector_ptr->CopyFrom(selector);
+  }
+  return td.label_selectors();
+}
+
+bool SatisfiesMatchExpressions(
+    const ResourceDescriptor& rd,
+    const RepeatedPtrField<NodeSelectorRequirement>& matchExpressions) {
+  const RepeatedPtrField<LabelSelector>& selectors =
+      NodeSelectorRequirementsAsLabelSelectors(matchExpressions);
+  return SatisfiesLabelSelectors(rd, selectors);
+}
+
+bool NodeMatchesNodeSelectorTerm(const ResourceDescriptor& rd,
+                                 const NodeSelectorTerm& nodeSelectorTerm) {
+  if (nodeSelectorTerm.matchexpressions_size() == 0) {
+    return false;
+  } else {
+    return SatisfiesMatchExpressions(rd, nodeSelectorTerm.matchexpressions());
+  }
+}
+
+bool NodeMatchesNodeSelectorTerms(
+    const ResourceDescriptor& rd,
+    const RepeatedPtrField<NodeSelectorTerm>& nodeSelectorTerms) {
+  for (auto& req : nodeSelectorTerms) {
+    if (req.matchexpressions_size() == 0) {
+      continue;
+    }
+    if (!SatisfiesMatchExpressions(rd, req.matchexpressions())) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+bool SatisfiesNodeSelectorAndNodeAffinity(const ResourceDescriptor& rd, const TaskDescriptor& td) {
+  if (td.label_selectors_size()) {
+    if (!SatisfiesLabelSelectors(rd, td.label_selectors())) {
+      return false;
+    } 
+  }
+  bool nodeAffinityMatches = true;
+  if (td.has_affinity() && td.affinity().has_node_affinity()) {
+    const Affinity& affinity = td.affinity();
+    if (affinity.node_affinity()
+            .has_requiredduringschedulingignoredduringexecution()) {
+      if (affinity.node_affinity()
+              .requiredduringschedulingignoredduringexecution()
+              .nodeselectorterms_size()) {
+        // Match node selector for
+        // requiredDuringSchedulingIgnoredDuringExecution.
+        auto nodeSelectorTerms =
+            affinity.node_affinity()
+                .requiredduringschedulingignoredduringexecution()
+                .nodeselectorterms();
+        nodeAffinityMatches =
+            nodeAffinityMatches &&
+            NodeMatchesNodeSelectorTerms(rd, nodeSelectorTerms);
+      }
+    } else {
+      // if no required NodeAffinity requirements, will do no-op, means select
+      // all nodes.
+      return true;
+    }
+  }
+  return nodeAffinityMatches;
+}
+
 bool SatisfiesLabelSelectors(const ResourceDescriptor& rd,
                              const RepeatedPtrField<LabelSelector>& selectors) {
   unordered_map<string, string> rd_labels;

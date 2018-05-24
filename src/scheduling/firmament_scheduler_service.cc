@@ -29,6 +29,7 @@
 #include "misc/utils.h"
 #include "misc/wall_time.h"
 #include "platforms/sim/simulated_messaging_adapter.h"
+#include "scheduling/event_driven_scheduler.h"
 #include "scheduling/firmament_scheduler.grpc.pb.h"
 #include "scheduling/firmament_scheduler.pb.h"
 #include "scheduling/flow/flow_scheduler.h"
@@ -37,7 +38,6 @@
 #include "scheduling/scheduling_delta.pb.h"
 #include "scheduling/simple/simple_scheduler.h"
 #include "storage/simple_object_store.h"
-#include "scheduling/event_driven_scheduler.h"
 
 using grpc::Server;
 using grpc::ServerBuilder;
@@ -60,10 +60,8 @@ DEFINE_string(service_scheduler, "flow", "Scheduler to use: flow | simple");
 
 namespace firmament {
 
-class FirmamentSchedulerServiceImpl final :
-  public FirmamentScheduler::Service {
-
-  public:
+class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
+ public:
   FirmamentSchedulerServiceImpl() {
     job_map_.reset(new JobMap_t);
     task_map_.reset(new TaskMap_t);
@@ -72,24 +70,21 @@ class FirmamentSchedulerServiceImpl final :
     topology_manager_.reset(new TopologyManager);
     ResourceStatus* top_level_res_status = CreateTopLevelResource();
     top_level_res_id_ =
-      ResourceIDFromString(top_level_res_status->descriptor().uuid());
+        ResourceIDFromString(top_level_res_status->descriptor().uuid());
     sim_messaging_adapter_ = new SimulatedMessagingAdapter<BaseMessage>();
     trace_generator_ = new TraceGenerator(&wall_time_);
     if (FLAGS_service_scheduler == "flow") {
-      scheduler_ =
-        new FlowScheduler(job_map_, resource_map_,
-                          top_level_res_status->mutable_topology_node(),
-                          obj_store_, task_map_, knowledge_base_,
-                          topology_manager_, sim_messaging_adapter_, NULL,
-                          top_level_res_id_, "", &wall_time_, trace_generator_);
+      scheduler_ = new FlowScheduler(
+          job_map_, resource_map_,
+          top_level_res_status->mutable_topology_node(), obj_store_, task_map_,
+          knowledge_base_, topology_manager_, sim_messaging_adapter_, NULL,
+          top_level_res_id_, "", &wall_time_, trace_generator_);
     } else if (FLAGS_service_scheduler == "simple") {
-      scheduler_ =
-        new SimpleScheduler(job_map_, resource_map_,
-                            top_level_res_status->mutable_topology_node(),
-                            obj_store_, task_map_, knowledge_base_,
-                            topology_manager_, sim_messaging_adapter_, NULL,
-                            top_level_res_id_, "", &wall_time_,
-                            trace_generator_);
+      scheduler_ = new SimpleScheduler(
+          job_map_, resource_map_,
+          top_level_res_status->mutable_topology_node(), obj_store_, task_map_,
+          knowledge_base_, topology_manager_, sim_messaging_adapter_, NULL,
+          top_level_res_id_, "", &wall_time_, trace_generator_);
     } else {
       LOG(FATAL) << "Flag specifies unknown scheduler "
                  << FLAGS_service_scheduler;
@@ -111,28 +106,44 @@ class FirmamentSchedulerServiceImpl final :
     td_ptr->set_start_time(wall_time_.GetCurrentTimestamp());
   }
 
-  void HandlePreemptionDelta(const SchedulingDelta& delta)
-  {
+  void HandlePreemptionDelta(const SchedulingDelta& delta) {
     // TODO(ionel): Implement!
   }
 
-  void HandleMigrationDelta(const SchedulingDelta& delta)
-  {
+  void HandleMigrationDelta(const SchedulingDelta& delta) {
     // TODO(ionel): Implement!
   }
 
-  Status Schedule(ServerContext* context,
-                  const ScheduleRequest* request,
+  void UpdateMachineSamplesToKnowledgeBaseStatically(const TaskDescriptor* td_ptr, bool add) {
+    ResourceID_t res_id = ResourceIDFromString(td_ptr->scheduled_to_resource());
+    ResourceStatus* rs = FindPtrOrNull(*resource_map_, res_id);
+    ResourceStats resource_stats;
+    CpuStats* cpu_stats = resource_stats.add_cpus_stats();
+    bool have_sample =
+      knowledge_base_->GetLatestStatsForMachine(ResourceIDFromString(rs->mutable_topology_node()->parent_id()), &resource_stats);
+    if (have_sample) {
+      if (add) {
+        cpu_stats->set_cpu_allocatable(cpu_stats->cpu_allocatable() + td_ptr->resource_request().cpu_cores());
+        resource_stats.set_mem_allocatable(resource_stats.mem_allocatable() + td_ptr->resource_request().ram_cap());
+      } else {
+        cpu_stats->set_cpu_allocatable(cpu_stats->cpu_allocatable() - td_ptr->resource_request().cpu_cores());
+        resource_stats.set_mem_allocatable(resource_stats.mem_allocatable() - td_ptr->resource_request().ram_cap());
+      }
+      knowledge_base_->AddMachineSample(resource_stats);
+    }
+  }
+
+  Status Schedule(ServerContext* context, const ScheduleRequest* request,
                   SchedulingDeltas* reply) override {
     SchedulerStats sstat;
     vector<SchedulingDelta> deltas;
     scheduler_->ScheduleAllJobs(&sstat, &deltas);
     // Extract results
-    if(deltas.size()) {
+    if (deltas.size()) {
       LOG(INFO) << "Got " << deltas.size() << " scheduling deltas";
     }
     for (auto& d : deltas) {
-      //LOG(INFO) << "Delta: " << d.DebugString();
+      // LOG(INFO) << "Delta: " << d.DebugString();
       SchedulingDelta* ret_delta = reply->add_deltas();
       ret_delta->CopyFrom(d);
       if (d.type() == SchedulingDelta::PLACE) {
@@ -151,18 +162,22 @@ class FirmamentSchedulerServiceImpl final :
     return Status::OK;
   }
 
-  Status TaskCompleted(ServerContext* context,
-                       const TaskUID* tid_ptr,
+  Status TaskCompleted(ServerContext* context, const TaskUID* tid_ptr,
                        TaskCompletedResponse* reply) override {
     TaskDescriptor* td_ptr = FindPtrOrNull(*task_map_, tid_ptr->task_uid());
     if (td_ptr == NULL) {
       reply->set_type(TaskReplyType::TASK_NOT_FOUND);
       return Status::OK;
     }
+    // TODO(jagadish): We need to remove below code once we start
+    // getting machine resource stats samples from poseidon i.e., heapster.
+    // Currently updating machine samples statically based on state of pod.
+    if (!td_ptr->scheduled_to_resource().empty()) {
+      UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
+    }
     JobID_t job_id = JobIDFromString(td_ptr->job_id());
     JobDescriptor* jd_ptr = FindOrNull(*job_map_, job_id);
-    if (jd_ptr == NULL)
-    {
+    if (jd_ptr == NULL) {
       reply->set_type(TaskReplyType::TASK_JOB_NOT_FOUND);
       return Status::OK;
     }
@@ -173,7 +188,7 @@ class FirmamentSchedulerServiceImpl final :
     scheduler_->HandleTaskFinalReport(report, td_ptr);
     // Check if it was the last task of the job.
     uint64_t* num_incomplete_tasks =
-      FindOrNull(job_num_incomplete_tasks_, job_id);
+        FindOrNull(job_num_incomplete_tasks_, job_id);
     CHECK_NOTNULL(num_incomplete_tasks);
     CHECK_GE(*num_incomplete_tasks, 1);
     (*num_incomplete_tasks)--;
@@ -184,27 +199,38 @@ class FirmamentSchedulerServiceImpl final :
     return Status::OK;
   }
 
-  Status TaskFailed(ServerContext* context,
-                    const TaskUID* tid_ptr,
+  Status TaskFailed(ServerContext* context, const TaskUID* tid_ptr,
                     TaskFailedResponse* reply) override {
     TaskDescriptor* td_ptr = FindPtrOrNull(*task_map_, tid_ptr->task_uid());
     if (td_ptr == NULL) {
       reply->set_type(TaskReplyType::TASK_NOT_FOUND);
       return Status::OK;
     }
+    // TODO(jagadish): We need to remove below code once we start
+    // getting machine resource stats samples from poseidon i.e., heapster.
+    // Currently updating machine samples statically based on state of pod.
+    if (!td_ptr->scheduled_to_resource().empty()) {
+      UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
+    }
     scheduler_->HandleTaskFailure(td_ptr);
     reply->set_type(TaskReplyType::TASK_FAILED_OK);
     return Status::OK;
   }
 
-  Status TaskRemoved(ServerContext* context,
-                     const TaskUID* tid_ptr,
+  Status TaskRemoved(ServerContext* context, const TaskUID* tid_ptr,
                      TaskRemovedResponse* reply) override {
-    boost::lock_guard<boost::recursive_mutex> lock(scheduler_->scheduling_lock_);
+    boost::lock_guard<boost::recursive_mutex> lock(
+        scheduler_->scheduling_lock_);
     TaskDescriptor* td_ptr = FindPtrOrNull(*task_map_, tid_ptr->task_uid());
     if (td_ptr == NULL) {
       reply->set_type(TaskReplyType::TASK_NOT_FOUND);
       return Status::OK;
+    }
+    // TODO(jagadish): We need to remove below code once we start
+    // getting machine resource stats samples from poseidon i.e., heapster.
+    // Currently updating machine samples statically based on state of pod.
+    if (!td_ptr->scheduled_to_resource().empty()) {
+      UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
     }
     scheduler_->HandleTaskRemoval(td_ptr);
     JobID_t job_id = JobIDFromString(td_ptr->job_id());
@@ -216,12 +242,12 @@ class FirmamentSchedulerServiceImpl final :
       task_map_->erase(td_ptr->uid());
     }
     uint64_t* num_tasks_to_remove =
-      FindOrNull(job_num_tasks_to_remove_, job_id);
+        FindOrNull(job_num_tasks_to_remove_, job_id);
     CHECK_NOTNULL(num_tasks_to_remove);
     (*num_tasks_to_remove)--;
     if (*num_tasks_to_remove == 0) {
       uint64_t* num_incomplete_tasks =
-        FindOrNull(job_num_incomplete_tasks_, job_id);
+          FindOrNull(job_num_incomplete_tasks_, job_id);
       if (*num_incomplete_tasks > 0) {
         scheduler_->HandleJobRemoval(job_id);
       }
@@ -238,7 +264,8 @@ class FirmamentSchedulerServiceImpl final :
   Status TaskSubmitted(ServerContext* context,
                        const TaskDescription* task_desc_ptr,
                        TaskSubmittedResponse* reply) override {
-    boost::lock_guard<boost::recursive_mutex> lock(scheduler_->scheduling_lock_);
+    boost::lock_guard<boost::recursive_mutex> lock(
+        scheduler_->scheduling_lock_);
     TaskID_t task_id = task_desc_ptr->task_descriptor().uid();
     if (FindPtrOrNull(*task_map_, task_id)) {
       reply->set_type(TaskReplyType::TASK_ALREADY_SUBMITTED);
@@ -250,14 +277,14 @@ class FirmamentSchedulerServiceImpl final :
     }
     JobID_t job_id = JobIDFromString(task_desc_ptr->task_descriptor().job_id());
     JobDescriptor* jd_ptr = FindOrNull(*job_map_, job_id);
-    //LOG(INFO) << "Job id is " << job_id ;
+    // LOG(INFO) << "Job id is " << job_id ;
     if (jd_ptr == NULL) {
       CHECK(InsertIfNotPresent(job_map_.get(), job_id,
                                task_desc_ptr->job_descriptor()));
       jd_ptr = FindOrNull(*job_map_, job_id);
       TaskDescriptor* root_td_ptr = jd_ptr->mutable_root_task();
-      CHECK(InsertIfNotPresent(task_map_.get(), root_td_ptr->uid(),
-                               root_td_ptr));
+      CHECK(
+          InsertIfNotPresent(task_map_.get(), root_td_ptr->uid(), root_td_ptr));
       root_td_ptr->set_submit_time(wall_time_.GetCurrentTimestamp());
       CHECK(InsertIfNotPresent(&job_num_incomplete_tasks_, job_id, 0));
       CHECK(InsertIfNotPresent(&job_num_tasks_to_remove_, job_id, 0));
@@ -268,17 +295,17 @@ class FirmamentSchedulerServiceImpl final :
       td_ptr->set_submit_time(wall_time_.GetCurrentTimestamp());
     }
     uint64_t* num_incomplete_tasks =
-      FindOrNull(job_num_incomplete_tasks_, job_id);
+        FindOrNull(job_num_incomplete_tasks_, job_id);
     CHECK_NOTNULL(num_incomplete_tasks);
     if (*num_incomplete_tasks == 0) {
       scheduler_->AddJob(jd_ptr);
     }
     (*num_incomplete_tasks)++;
     uint64_t* num_tasks_to_remove =
-      FindOrNull(job_num_tasks_to_remove_, job_id);
+        FindOrNull(job_num_tasks_to_remove_, job_id);
     (*num_tasks_to_remove)++;
-    if( (*num_tasks_to_remove) >= 3800 )
-	LOG(INFO) << "All tasks are submitted" << job_id << ", " << 3800 ;
+    if ((*num_tasks_to_remove) >= 3800)
+      LOG(INFO) << "All tasks are submitted" << job_id << ", " << 3800;
     reply->set_type(TaskReplyType::TASK_SUBMITTED_OK);
     return Status::OK;
   }
@@ -313,7 +340,7 @@ class FirmamentSchedulerServiceImpl final :
 
   bool CheckResourceDoesntExist(const ResourceDescriptor& rd) {
     ResourceStatus* rs_ptr =
-      FindPtrOrNull(*resource_map_, ResourceIDFromString(rd.uuid()));
+        FindPtrOrNull(*resource_map_, ResourceIDFromString(rd.uuid()));
     return rs_ptr == NULL;
   }
 
@@ -321,14 +348,15 @@ class FirmamentSchedulerServiceImpl final :
     ResourceDescriptor* rd_ptr = rtnd_ptr->mutable_resource_desc();
     ResourceID_t res_id = ResourceIDFromString(rd_ptr->uuid());
     ResourceStatus* rs_ptr =
-      new ResourceStatus(rd_ptr, rtnd_ptr, rd_ptr->friendly_name(), 0);
+        new ResourceStatus(rd_ptr, rtnd_ptr, rd_ptr->friendly_name(), 0);
     CHECK(InsertIfNotPresent(resource_map_.get(), res_id, rs_ptr));
   }
 
   Status NodeAdded(ServerContext* context,
                    const ResourceTopologyNodeDescriptor* submitted_rtnd_ptr,
                    NodeAddedResponse* reply) override {
-    boost::lock_guard<boost::recursive_mutex> lock(scheduler_->scheduling_lock_);
+    boost::lock_guard<boost::recursive_mutex> lock(
+        scheduler_->scheduling_lock_);
     bool doesnt_exist = DFSTraverseResourceProtobufTreeWhileTrue(
         *submitted_rtnd_ptr,
         boost::bind(&FirmamentSchedulerServiceImpl::CheckResourceDoesntExist,
@@ -338,10 +366,10 @@ class FirmamentSchedulerServiceImpl final :
       return Status::OK;
     }
     ResourceStatus* root_rs_ptr =
-      FindPtrOrNull(*resource_map_, top_level_res_id_);
+        FindPtrOrNull(*resource_map_, top_level_res_id_);
     CHECK_NOTNULL(root_rs_ptr);
     ResourceTopologyNodeDescriptor* rtnd_ptr =
-      root_rs_ptr->mutable_topology_node()->add_children();
+        root_rs_ptr->mutable_topology_node()->add_children();
     rtnd_ptr->CopyFrom(*submitted_rtnd_ptr);
     rtnd_ptr->set_parent_id(to_string(top_level_res_id_));
     DFSTraverseResourceProtobufTreeReturnRTND(
@@ -356,7 +384,8 @@ class FirmamentSchedulerServiceImpl final :
 
     // Add Node initial status simulation
     ResourceStats resource_stats;
-    ResourceID_t res_id = ResourceIDFromString(rtnd_ptr->resource_desc().uuid());
+    ResourceID_t res_id =
+        ResourceIDFromString(rtnd_ptr->resource_desc().uuid());
     ResourceStatus* rs_ptr = FindPtrOrNull(*resource_map_, res_id);
     if (rs_ptr == NULL || rs_ptr->mutable_descriptor() == NULL) {
       reply->set_type(NodeReplyType::NODE_NOT_FOUND);
@@ -365,29 +394,37 @@ class FirmamentSchedulerServiceImpl final :
     resource_stats.set_resource_id(rtnd_ptr->resource_desc().uuid());
     resource_stats.set_timestamp(0);
     CpuStats* cpu_stats = resource_stats.add_cpus_stats();
-    cpu_stats->set_cpu_capacity(rtnd_ptr->resource_desc().resource_capacity().cpu_cores());
-    // Assuming 80% of cpu/mem is is allocatable neglecting 20% for other processes in node.
-    cpu_stats->set_cpu_allocatable(rtnd_ptr->resource_desc().resource_capacity().cpu_cores()*0.80);
-    //resource_stats.cpus_stats(0).set_cpu_utilization(0.0);
-    //resource_stats.cpus_stats(0).set_cpu_reservation(0.0);
-    resource_stats.set_mem_allocatable(rtnd_ptr->resource_desc().resource_capacity().ram_cap());
-    resource_stats.set_mem_capacity(rtnd_ptr->resource_desc().resource_capacity().ram_cap()*0.80);
-    //resource_stats.set_mem_utilization(0.0);
-    //resource_stats.set_mem_reservation(0.0);
+    cpu_stats->set_cpu_capacity(
+        rtnd_ptr->resource_desc().resource_capacity().cpu_cores());
+    // Assuming 80% of cpu/mem is is allocatable neglecting 20% for other
+    // processes in node.
+    cpu_stats->set_cpu_allocatable(
+        rtnd_ptr->resource_desc().resource_capacity().cpu_cores() * 0.80);
+    // resource_stats.cpus_stats(0).set_cpu_utilization(0.0);
+    // resource_stats.cpus_stats(0).set_cpu_reservation(0.0);
+    resource_stats.set_mem_allocatable(
+        rtnd_ptr->resource_desc().resource_capacity().ram_cap());
+    resource_stats.set_mem_capacity(
+        rtnd_ptr->resource_desc().resource_capacity().ram_cap() * 0.80);
+    // resource_stats.set_mem_utilization(0.0);
+    // resource_stats.set_mem_reservation(0.0);
     resource_stats.set_disk_bw(0);
     resource_stats.set_net_rx_bw(0);
     resource_stats.set_net_tx_bw(0);
-    //LOG(INFO) << "DEBUG: During node additions: CPU CAP: " << cpu_stats->cpu_capacity() << "\n"
-    //          << "                              CPU ALLOC: " << cpu_stats->cpu_allocatable() << "\n"
-    //          << "                              MEM CAP: " << resource_stats.mem_capacity() << "\n"
-    //          << "                              MEM ALLOC: " << resource_stats.mem_allocatable();
+    // LOG(INFO) << "DEBUG: During node additions: CPU CAP: " <<
+    // cpu_stats->cpu_capacity() << "\n"
+    //          << "                              CPU ALLOC: " <<
+    //          cpu_stats->cpu_allocatable() << "\n"
+    //          << "                              MEM CAP: " <<
+    //          resource_stats.mem_capacity() << "\n"
+    //          << "                              MEM ALLOC: " <<
+    //          resource_stats.mem_allocatable();
     knowledge_base_->AddMachineSample(resource_stats);
     return Status::OK;
   }
 
-  Status NodeFailed(ServerContext* context,
-                   const ResourceUID* rid_ptr,
-                   NodeFailedResponse* reply) override {
+  Status NodeFailed(ServerContext* context, const ResourceUID* rid_ptr,
+                    NodeFailedResponse* reply) override {
     ResourceID_t res_id = ResourceIDFromString(rid_ptr->resource_uid());
     ResourceStatus* rs_ptr = FindPtrOrNull(*resource_map_, res_id);
     if (rs_ptr == NULL) {
@@ -399,8 +436,7 @@ class FirmamentSchedulerServiceImpl final :
     return Status::OK;
   }
 
-  Status NodeRemoved(ServerContext* context,
-                     const ResourceUID* rid_ptr,
+  Status NodeRemoved(ServerContext* context, const ResourceUID* rid_ptr,
                      NodeRemovedResponse* reply) override {
     ResourceID_t res_id = ResourceIDFromString(rid_ptr->resource_uid());
     ResourceStatus* rs_ptr = FindPtrOrNull(*resource_map_, res_id);
@@ -416,17 +452,17 @@ class FirmamentSchedulerServiceImpl final :
   Status NodeUpdated(ServerContext* context,
                      const ResourceTopologyNodeDescriptor* updated_rtnd_ptr,
                      NodeUpdatedResponse* reply) override {
-    ResourceID_t res_id = ResourceIDFromString(updated_rtnd_ptr->resource_desc().uuid());
+    ResourceID_t res_id =
+        ResourceIDFromString(updated_rtnd_ptr->resource_desc().uuid());
     ResourceStatus* rs_ptr = FindPtrOrNull(*resource_map_, res_id);
     if (rs_ptr == NULL) {
       reply->set_type(NodeReplyType::NODE_NOT_FOUND);
       return Status::OK;
     }
     DFSTraverseResourceProtobufTreesReturnRTNDs(
-        rs_ptr->mutable_topology_node(),
-        *updated_rtnd_ptr,
-        boost::bind(&FirmamentSchedulerServiceImpl::UpdateNodeLabels,
-                    this, _1, _2));
+        rs_ptr->mutable_topology_node(), *updated_rtnd_ptr,
+        boost::bind(&FirmamentSchedulerServiceImpl::UpdateNodeLabels, this, _1,
+                    _2));
     // TODO(ionel): Support other types of node updates.
     reply->set_type(NodeReplyType::NODE_UPDATED_OK);
     return Status::OK;
@@ -443,8 +479,7 @@ class FirmamentSchedulerServiceImpl final :
     }
   }
 
-  Status AddTaskStats(ServerContext* context,
-                      const TaskStats* task_stats,
+  Status AddTaskStats(ServerContext* context, const TaskStats* task_stats,
                       TaskStatsResponse* reply) override {
     TaskID_t task_id = task_stats->task_id();
     TaskDescriptor* td_ptr = FindPtrOrNull(*task_map_, task_id);
@@ -469,9 +504,8 @@ class FirmamentSchedulerServiceImpl final :
     return Status::OK;
   }
 
-  Status Check(ServerContext* context,
-	       const HealthCheckRequest* health_service,
-	       HealthCheckResponse* reply) override {
+  Status Check(ServerContext* context, const HealthCheckRequest* health_service,
+               HealthCheckResponse* reply) override {
     if (health_service->grpc_service().empty()) {
       reply->set_status(ServingStatus::SERVING);
     }
@@ -495,35 +529,34 @@ class FirmamentSchedulerServiceImpl final :
   ResourceID_t top_level_res_id_;
   // Mapping from JobID_t to number of incomplete job tasks.
   unordered_map<JobID_t, uint64_t, boost::hash<boost::uuids::uuid>>
-    job_num_incomplete_tasks_;
+      job_num_incomplete_tasks_;
   // Mapping from JobID_t to number of job tasks left to be removed.
   unordered_map<JobID_t, uint64_t, boost::hash<boost::uuids::uuid>>
-    job_num_tasks_to_remove_;
+      job_num_tasks_to_remove_;
   KnowledgeBasePopulator* kb_populator_;
 
   ResourceStatus* CreateTopLevelResource() {
     ResourceID_t res_id = GenerateResourceID();
     ResourceTopologyNodeDescriptor* rtnd_ptr =
-      new ResourceTopologyNodeDescriptor();
+        new ResourceTopologyNodeDescriptor();
     // Set up the RD
     ResourceDescriptor* rd_ptr = rtnd_ptr->mutable_resource_desc();
     rd_ptr->set_uuid(to_string(res_id));
     rd_ptr->set_type(ResourceDescriptor::RESOURCE_COORDINATOR);
     // Need to maintain a ResourceStatus for the resource map
     ResourceStatus* rs_ptr =
-      new ResourceStatus(rd_ptr, rtnd_ptr, "root_resource", 0);
+        new ResourceStatus(rd_ptr, rtnd_ptr, "root_resource", 0);
     // Insert into resource map
     CHECK(InsertIfNotPresent(resource_map_.get(), res_id, rs_ptr));
     return rs_ptr;
   }
   boost::recursive_mutex task_submission_lock_;
   boost::recursive_mutex node_addition_lock_;
-
 };
 
 }  // namespace firmament
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   VLOG(1) << "Calling common::InitFirmament";
   firmament::common::InitFirmament(argc, argv);
   std::string server_address(FLAGS_firmament_scheduler_service_address + ":" +
