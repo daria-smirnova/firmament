@@ -3,18 +3,16 @@ syntax = "proto3";
 package firmament;
 
 import "base/node_affinity.proto";
+import "base/pod_affinity.proto";
+import "base/pod_anti_affinity.proto";
 
-// Affinity is a group of affinity scheduling rules.
 message Affinity {
-  // Describes node affinity scheduling rules for the pod.
-  // +optional
-  NodeAffinity node_affinity = 1;
 
-  // Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other pod(s)).
-  // +optional
-  // PodAffinity podAffinity = 2;
+    NodeAffinity node_affinity = 1;
+    
+    PodAffinity pod_affinity = 2;
 
-  // Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some other pod(s)).
-  // +optional
-  // PodAntiAffinity podAntiAffinity = 3;
+    PodAntiAffinity pod_anti_affinity = 3;
 }
+
+

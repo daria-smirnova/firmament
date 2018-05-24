@@ -12,6 +12,8 @@ set(BASE_PROTOBUFS
   base/label.proto
   base/label_selector.proto
   base/node_affinity.proto
+  base/pod_affinity.proto
+  base/pod_anti_affinity.proto
   base/reference_desc.proto
   base/resource_desc.proto
   base/resource_stats.proto
