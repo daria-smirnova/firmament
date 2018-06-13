@@ -49,7 +49,8 @@ class CpuCostModelTest : public ::testing::Test {
     resource_map_.reset(new ResourceMap_t);
     task_map_.reset(new TaskMap_t);
     knowledge_base_.reset(new KnowledgeBase);
-    cost_model = new CpuCostModel(resource_map_, task_map_, knowledge_base_);
+    cost_model =
+        new CpuCostModel(resource_map_, task_map_, knowledge_base_, NULL);
   }
 
   virtual ~CpuCostModelTest() {

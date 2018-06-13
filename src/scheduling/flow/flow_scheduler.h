@@ -65,7 +65,10 @@ class FlowScheduler : public EventDrivenScheduler {
                 ResourceID_t coordinator_res_id,
                 const string& coordinator_uri,
                 TimeInterface* time_manager,
-                TraceGenerator* trace_generator);
+                TraceGenerator* trace_generator,
+                unordered_map<string, unordered_map<string, vector<TaskID_t>>>*
+                    labels_map,
+                vector<TaskID_t> *affinity_antiaffinity_tasks);
   ~FlowScheduler();
   virtual void DeregisterResource(ResourceTopologyNodeDescriptor* rtnd_ptr);
   virtual void HandleJobCompletion(JobID_t job_id);
@@ -88,6 +91,8 @@ class FlowScheduler : public EventDrivenScheduler {
                                 bool local,
                                 bool simulated);
   virtual uint64_t ScheduleAllJobs(SchedulerStats* scheduler_stats);
+  virtual uint64_t ScheduleAllQueueJobs(SchedulerStats* scheduler_stats,
+                                        vector<SchedulingDelta>* deltas);
   virtual uint64_t ScheduleAllJobs(SchedulerStats* scheduler_stats,
                                    vector<SchedulingDelta>* deltas);
   virtual uint64_t ScheduleJob(JobDescriptor* jd_ptr,

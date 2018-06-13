@@ -122,7 +122,7 @@ Coordinator::Coordinator()
         job_table_, associated_resources_, local_resource_topology_,
         object_store_, task_table_, knowledge_base, topology_manager_,
         m_adapter_, NULL, uuid_, FLAGS_listen_uri, time_manager_,
-        trace_generator_);
+        trace_generator_, NULL, NULL);
   } else {
     // Unknown scheduler specified, error.
     LOG(FATAL) << "Unknown or unrecognized scheduler '" << FLAGS_scheduler

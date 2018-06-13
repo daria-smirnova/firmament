@@ -62,7 +62,10 @@ class EventDrivenScheduler : public SchedulerInterface {
                        ResourceID_t coordinator_res_id,
                        const string& coordinator_uri,
                        TimeInterface* time_manager,
-                       TraceGenerator* trace_generator);
+                       TraceGenerator* trace_generator,
+                       unordered_map<string, unordered_map<string, vector<TaskID_t>>>*
+                           labels_map,
+                       vector<TaskID_t> *affinity_antiaffinity_tasks);
   ~EventDrivenScheduler();
   virtual void AddJob(JobDescriptor* jd_ptr);
   ResourceID_t* BoundResourceForTask(TaskID_t task_id);
@@ -183,6 +186,9 @@ class EventDrivenScheduler : public SchedulerInterface {
   shared_ptr<TopologyManager> topology_manager_;
   TimeInterface* time_manager_;
   TraceGenerator* trace_generator_;
+  //Pod affinity/anti-affinity
+  bool one_task_runnable;
+  bool queue_based_schedule;
 };
 
 }  // namespace scheduler

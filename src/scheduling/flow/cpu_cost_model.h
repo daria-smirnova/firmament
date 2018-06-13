@@ -41,8 +41,9 @@ struct CpuMemCostVector_t {
   uint64_t cpu_mem_cost_;
   uint64_t balanced_res_cost_;
   uint64_t node_affinity_soft_cost_;
+  uint64_t pod_affinity_soft_cost_;
   CpuMemCostVector_t()
-      : cpu_mem_cost_(0), balanced_res_cost_(0), node_affinity_soft_cost_(0) {}
+      : cpu_mem_cost_(0), balanced_res_cost_(0), node_affinity_soft_cost_(0), pod_affinity_soft_cost_(0) {}
 };
 
 struct CpuMemResVector_t {
@@ -78,7 +79,9 @@ class CpuCostModel : public CostModelInterface {
  public:
   CpuCostModel(shared_ptr<ResourceMap_t> resource_map,
                shared_ptr<TaskMap_t> task_map,
-               shared_ptr<KnowledgeBase> knowledge_base);
+               shared_ptr<KnowledgeBase> knowledge_base,
+               unordered_map<string, unordered_map<string, vector<TaskID_t>>>*
+                   labels_map);
   // Costs pertaining to leaving tasks unscheduled
   ArcDescriptor TaskToUnscheduledAgg(TaskID_t task_id);
   ArcDescriptor UnscheduledAggToSink(JobID_t job_id);
@@ -103,6 +106,44 @@ class CpuCostModel : public CostModelInterface {
   vector<EquivClass_t>* GetTaskEquivClasses(TaskID_t task_id);
   vector<ResourceID_t>* GetOutgoingEquivClassPrefArcs(EquivClass_t tec);
   vector<ResourceID_t>* GetTaskPreferenceArcs(TaskID_t task_id);
+  // Pod anti-affinity
+  bool MatchExpressionWithPodLabels(const ResourceDescriptor& rd,
+                                    const LabelSelectorRequirement& expression);
+  bool NotMatchExpressionWithPodLabels(
+      const ResourceDescriptor& rd, const LabelSelectorRequirement& expression);
+  bool MatchExpressionKeyWithPodLabels(
+      const ResourceDescriptor& rd, const LabelSelectorRequirement& expression);
+  bool NotMatchExpressionKeyWithPodLabels(
+      const ResourceDescriptor& rd, const LabelSelectorRequirement& expression);
+  bool SatisfiesPodAntiAffinityMatchExpression(
+      const ResourceDescriptor& rd,
+      const LabelSelectorRequirementAntiAff& expression);
+  bool SatisfiesPodAffinityMatchExpression(
+      const ResourceDescriptor& rd, const LabelSelectorRequirement& expression);
+  bool SatisfiesPodAntiAffinityMatchExpressions(
+      const ResourceDescriptor& rd,
+      const RepeatedPtrField<LabelSelectorRequirementAntiAff>&
+          matchexpressions);
+  bool SatisfiesPodAffinityMatchExpressions(
+      const ResourceDescriptor& rd,
+      const RepeatedPtrField<LabelSelectorRequirement>& matchexpressions);
+  bool SatisfiesPodAntiAffinityTerm(const ResourceDescriptor& rd,
+                                    const TaskDescriptor& td,
+                                    const PodAffinityTermAntiAff& term);
+  bool SatisfiesPodAffinityTerm(const ResourceDescriptor& rd,
+                                const TaskDescriptor& td,
+                                const PodAffinityTerm& term);
+  bool SatisfiesPodAntiAffinityTerms(
+      const ResourceDescriptor& rd, const TaskDescriptor& td,
+      const RepeatedPtrField<PodAffinityTermAntiAff>& podantiaffinityterms);
+  bool SatisfiesPodAffinityTerms(
+      const ResourceDescriptor& rd, const TaskDescriptor& td,
+      const RepeatedPtrField<PodAffinityTerm>& podaffinityterms);
+  bool SatisfiesPodAffinityAntiAffinityRequired(const ResourceDescriptor& rd,
+                                                const TaskDescriptor& td);
+  void CalculatePodAffinityAntiAffinityPreference(const ResourceDescriptor& rd,
+                                                  const TaskDescriptor& td,
+                                                  const EquivClass_t ec);
   vector<EquivClass_t>* GetEquivClassToEquivClassesArcs(EquivClass_t tec);
   void AddMachine(ResourceTopologyNodeDescriptor* rtnd_ptr);
   void AddTask(TaskID_t task_id);
@@ -134,6 +175,13 @@ class CpuCostModel : public CostModelInterface {
     CHECK_NOTNULL(td);
     return *td;
   }
+  inline bool HasNamespace(const string name) {
+    if (namespaces.find(name) == namespaces.end()) {
+      return false;
+    } else {
+      return true;
+    }
+  }
 
   shared_ptr<ResourceMap_t> resource_map_;
   // The task map used in the rest of the system
@@ -157,6 +205,9 @@ class CpuCostModel : public CostModelInterface {
                                             boost::hash<boost::uuids::uuid>>>
       ec_to_node_priority_scores;
   unordered_map<EquivClass_t, MinMaxScores_t> ec_to_max_min_priority_scores;
+  // Pod affinity/anti-affinity
+  unordered_map<string, unordered_map<string, vector<TaskID_t>>>* labels_map_;
+  unordered_set<string> namespaces;
 };
 
 }  // namespace firmament

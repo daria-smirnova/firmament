@@ -19,6 +19,7 @@
  */
 
 #include <grpc++/grpc++.h>
+#include <chrono>
 
 #include "base/resource_status.h"
 #include "base/resource_topology_node_desc.pb.h"
@@ -57,6 +58,7 @@ DEFINE_string(firmament_scheduler_service_address, "127.0.0.1",
 DEFINE_string(firmament_scheduler_service_port, "9090",
               "The port of the scheduler service");
 DEFINE_string(service_scheduler, "flow", "Scheduler to use: flow | simple");
+DEFINE_uint64(queue_based_scheduling_time, 1, "Queue Based Schedule run time");
 
 namespace firmament {
 
@@ -78,7 +80,8 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
           job_map_, resource_map_,
           top_level_res_status->mutable_topology_node(), obj_store_, task_map_,
           knowledge_base_, topology_manager_, sim_messaging_adapter_, NULL,
-          top_level_res_id_, "", &wall_time_, trace_generator_);
+          top_level_res_id_, "", &wall_time_, trace_generator_, &labels_map_,
+          &affinity_antiaffinity_tasks_);
     } else if (FLAGS_service_scheduler == "simple") {
       scheduler_ = new SimpleScheduler(
           job_map_, resource_map_,
@@ -142,6 +145,24 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     if (deltas.size()) {
       LOG(INFO) << "Got " << deltas.size() << " scheduling deltas";
     }
+
+    // Schedule tasks having pod affinity/anti-affinity
+    chrono::high_resolution_clock::time_point start =
+        chrono::high_resolution_clock::now();
+    chrono::duration<unsigned int> time_spent(
+        chrono::duration_values<unsigned int>::zero());
+    while (affinity_antiaffinity_tasks_.size() &&
+           (time_spent.count() < FLAGS_queue_based_scheduling_time)) {
+      scheduler_->ScheduleAllQueueJobs(&sstat, &deltas);
+      chrono::high_resolution_clock::time_point end =
+          chrono::high_resolution_clock::now();
+      time_spent = chrono::duration_cast<chrono::seconds>(end - start);
+    }
+    if(deltas.size()) {
+      LOG(INFO) << "QueueBasedSchedule: Got " << deltas.size()
+              << " scheduling deltas";
+    }
+
     for (auto& d : deltas) {
       // LOG(INFO) << "Delta: " << d.DebugString();
       SchedulingDelta* ret_delta = reply->add_deltas();
@@ -161,6 +182,39 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     }
     return Status::OK;
   }
+
+  // Pod affinity/anti-affinity
+  void RemoveTaskFromLabelsMap(const TaskDescriptor td) {
+    for (const auto& label : td.labels()) {
+      unordered_map<string, vector<TaskID_t>>* label_values =
+          FindOrNull(labels_map_, label.key());
+      if (!label_values) {
+        vector<TaskID_t>* labels_map_tasks =
+            FindOrNull(*label_values, label.value());
+        if (labels_map_tasks) {
+          vector<TaskID_t>::iterator it_pos = find(
+              labels_map_tasks->begin(), labels_map_tasks->end(), td.uid());
+          if (it_pos != labels_map_tasks->end()) {
+            labels_map_tasks->erase(it_pos);
+            if (!labels_map_tasks->size()) {
+              label_values->erase(label.value());
+              if (label_values->empty()) labels_map_.erase(label.key());
+            }
+          }
+        }
+      }
+    }
+    if (td.has_affinity() && (td.affinity().has_pod_affinity() ||
+                              td.affinity().has_pod_anti_affinity())) {
+      vector<TaskID_t>::iterator it =
+          find(affinity_antiaffinity_tasks_.begin(),
+               affinity_antiaffinity_tasks_.end(), td.uid());
+      if (it != affinity_antiaffinity_tasks_.end()) {
+        affinity_antiaffinity_tasks_.erase(it);
+      }
+    }
+  }
+
 
   Status TaskCompleted(ServerContext* context, const TaskUID* tid_ptr,
                        TaskCompletedResponse* reply) override {
@@ -182,6 +236,7 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       return Status::OK;
     }
     td_ptr->set_finish_time(wall_time_.GetCurrentTimestamp());
+    RemoveTaskFromLabelsMap(*td_ptr);
     TaskFinalReport report;
     scheduler_->HandleTaskCompletion(td_ptr, &report);
     kb_populator_->PopulateTaskFinalReport(*td_ptr, &report);
@@ -212,6 +267,7 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     if (!td_ptr->scheduled_to_resource().empty()) {
       UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
     }
+    RemoveTaskFromLabelsMap(*td_ptr);
     scheduler_->HandleTaskFailure(td_ptr);
     reply->set_type(TaskReplyType::TASK_FAILED_OK);
     return Status::OK;
@@ -226,6 +282,7 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       reply->set_type(TaskReplyType::TASK_NOT_FOUND);
       return Status::OK;
     }
+    RemoveTaskFromLabelsMap(*td_ptr);
     // TODO(jagadish): We need to remove below code once we start
     // getting machine resource stats samples from poseidon i.e., heapster.
     // Currently updating machine samples statically based on state of pod.
@@ -261,6 +318,38 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     return Status::OK;
   }
 
+  // Pod affinity/anti-affinity
+  // Adding labels of task to the labels_map_
+  void AddTaskToLabelsMap(const TaskDescriptor& td) {
+    TaskID_t task_id = td.uid();
+    for (const auto& label : td.labels()) {
+      unordered_map<string, vector<TaskID_t>>* label_values =
+          FindOrNull(labels_map_, label.key());
+      if (!label_values) {
+        vector<TaskID_t> tasks;
+        tasks.push_back(task_id);
+        unordered_map<string, vector<TaskID_t>> values;
+        CHECK(InsertIfNotPresent(&values, label.value(), tasks));
+        CHECK(InsertIfNotPresent(&labels_map_, label.key(), values));
+      } else {
+        vector<TaskID_t>* labels_map_tasks =
+            FindOrNull(*label_values, label.value());
+        if (!labels_map_tasks) {
+          vector<TaskID_t> value_tasks;
+          value_tasks.push_back(task_id);
+          CHECK(
+              InsertIfNotPresent(&(*label_values), label.value(), value_tasks));
+        } else {
+          labels_map_tasks->push_back(task_id);
+        }
+      }
+    }
+    if (td.has_affinity() && (td.affinity().has_pod_affinity() ||
+                              td.affinity().has_pod_anti_affinity())) {
+      affinity_antiaffinity_tasks_.push_back(task_id);
+    }
+  }
+
   Status TaskSubmitted(ServerContext* context,
                        const TaskDescription* task_desc_ptr,
                        TaskSubmittedResponse* reply) override {
@@ -275,6 +364,7 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       reply->set_type(TaskReplyType::TASK_STATE_NOT_CREATED);
       return Status::OK;
     }
+    AddTaskToLabelsMap(task_desc_ptr->task_descriptor());
     JobID_t job_id = JobIDFromString(task_desc_ptr->task_descriptor().job_id());
     JobDescriptor* jd_ptr = FindOrNull(*job_map_, job_id);
     // LOG(INFO) << "Job id is " << job_id ;
@@ -534,6 +624,9 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
   unordered_map<JobID_t, uint64_t, boost::hash<boost::uuids::uuid>>
       job_num_tasks_to_remove_;
   KnowledgeBasePopulator* kb_populator_;
+  //Pod affinity/anti-affinity
+  unordered_map<string, unordered_map<string, vector<TaskID_t>>> labels_map_;
+  vector<TaskID_t> affinity_antiaffinity_tasks_;
 
   ResourceStatus* CreateTopLevelResource() {
     ResourceID_t res_id = GenerateResourceID();

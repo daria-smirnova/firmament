@@ -90,7 +90,7 @@ SimulatorBridge::SimulatorBridge(EventManager* event_manager,
         shared_ptr<machine::topology::TopologyManager>(
             new machine::topology::TopologyManager),
         messaging_adapter_, this, root_uuid, "http://localhost",
-        simulated_time_, trace_generator_);
+        simulated_time_, trace_generator_, NULL, NULL);
   } else {
     scheduler_ = new scheduler::SimpleScheduler(
         job_map_, resource_map_, &rtn_root_,

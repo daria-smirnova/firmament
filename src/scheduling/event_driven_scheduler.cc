@@ -66,9 +66,12 @@ EventDrivenScheduler::EventDrivenScheduler(
     ResourceID_t coordinator_res_id,
     const string& coordinator_uri,
     TimeInterface* time_manager,
-    TraceGenerator* trace_generator)
-  : SchedulerInterface(job_map, knowledge_base, resource_map, resource_topology,
-                       object_store, task_map),
+    TraceGenerator* trace_generator,
+    unordered_map<string, unordered_map<string, vector<TaskID_t>>>* labels_map,
+    vector<TaskID_t> *affinity_antiaffinity_tasks)
+  : SchedulerInterface(job_map, knowledge_base, resource_map,
+                       resource_topology, object_store, task_map, labels_map,
+                       affinity_antiaffinity_tasks),
       coordinator_uri_(coordinator_uri),
       coordinator_res_id_(coordinator_res_id),
       event_notifier_(event_notifier),
@@ -646,9 +649,44 @@ void EventDrivenScheduler::LazyGraphReduction(
         current_task->state() == TaskDescriptor::BLOCKING) {
       if (!will_block || (current_task->dependencies_size() == 0
                           && current_task->outputs_size() == 0)) {
-        current_task->set_state(TaskDescriptor::RUNNABLE);
-        InsertTaskIntoRunnables(JobIDFromString(current_task->job_id()),
-                                current_task->uid());
+        // Pod affinity/anti-affinity
+        if (current_task->has_affinity() &&
+            (current_task->affinity().has_pod_affinity() ||
+             current_task->affinity().has_pod_anti_affinity())) {
+          if (queue_based_schedule == false || one_task_runnable == true)
+            continue;
+          for (auto itr = affinity_antiaffinity_tasks_->begin();
+               itr != affinity_antiaffinity_tasks_->end(); itr++) {
+          }
+          for (auto task_itr = affinity_antiaffinity_tasks_->begin();
+               task_itr != affinity_antiaffinity_tasks_->end(); task_itr++) {
+            TaskDescriptor* tdp = FindPtrOrNull(*task_map_, *task_itr);
+            if (tdp) {
+              if ((tdp->state() == TaskDescriptor::RUNNABLE) &&
+                  (one_task_runnable == false)) {
+                TaskID_t task_id = *task_itr;
+                tdp->set_state(TaskDescriptor::CREATED);
+                affinity_antiaffinity_tasks_->erase(task_itr);
+                affinity_antiaffinity_tasks_->push_back(task_id);
+                JobID_t tdp_job_id = JobIDFromString(tdp->job_id());
+                runnable_tasks_[tdp_job_id].erase(task_id);
+                task_itr = affinity_antiaffinity_tasks_->begin();
+                continue;
+              }
+            }
+            if (tdp->state() == TaskDescriptor::CREATED) {
+              tdp->set_state(TaskDescriptor::RUNNABLE);
+              InsertTaskIntoRunnables(JobIDFromString(tdp->job_id()),
+                                      tdp->uid());
+              one_task_runnable = true;
+              break;
+            }
+          }
+        } else {
+          current_task->set_state(TaskDescriptor::RUNNABLE);
+          InsertTaskIntoRunnables(JobIDFromString(current_task->job_id()),
+                                  current_task->uid());
+        }
       }
     }
   }

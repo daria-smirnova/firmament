@@ -38,10 +38,12 @@ namespace firmament {
 
 CpuCostModel::CpuCostModel(shared_ptr<ResourceMap_t> resource_map,
                            shared_ptr<TaskMap_t> task_map,
-                           shared_ptr<KnowledgeBase> knowledge_base)
+                           shared_ptr<KnowledgeBase> knowledge_base,
+                           unordered_map<string, unordered_map<string, vector<TaskID_t>>>* labels_map)
     : resource_map_(resource_map),
       task_map_(task_map),
-      knowledge_base_(knowledge_base) {
+      knowledge_base_(knowledge_base),
+      labels_map_(labels_map) {
   // Set an initial value for infinity -- this overshoots a bit; would be nice
   // to have a tighter bound based on actual costs observed
   infinity_ = omega_ * CpuMemCostVector_t::dimensions_;
@@ -148,6 +150,7 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
   const TaskDescriptor* td_ptr = FindOrNull(ec_to_td_requirements, ec1);
   CHECK_NOTNULL(td_ptr);
   int64_t node_affinity_normalized_score = 0;
+  int64_t pod_affinity_normalized_score = 0;
   if (td_ptr->has_affinity()) {
     const Affinity& affinity = td_ptr->affinity();
     if (affinity.has_node_affinity()) {
@@ -184,9 +187,48 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
         }
       }
     }
+    
+    // Expressing pod affinity/anti-affinity priority scores.
+    if ((affinity.has_pod_affinity() &&
+         affinity.pod_affinity()
+             .preferredduringschedulingignoredduringexecution_size()) ||
+        (affinity.has_pod_anti_affinity() &&
+         affinity.pod_anti_affinity()
+             .preferredduringschedulingignoredduringexecution_size())) {
+      unordered_map<ResourceID_t, PriorityScoresList_t,
+                    boost::hash<boost::uuids::uuid>>*
+          nodes_priority_scores_ptr =
+              FindOrNull(ec_to_node_priority_scores, ec1);
+      CHECK_NOTNULL(nodes_priority_scores_ptr);
+      PriorityScoresList_t* priority_scores_struct_ptr =
+          FindOrNull(*nodes_priority_scores_ptr, *machine_res_id);
+      CHECK_NOTNULL(priority_scores_struct_ptr);
+      PriorityScore_t& pod_affinity_score =
+          priority_scores_struct_ptr->pod_affinity_priority;
+      MinMaxScores_t* max_min_priority_scores =
+          FindOrNull(ec_to_max_min_priority_scores, ec1);
+      CHECK_NOTNULL(max_min_priority_scores);
+      if (pod_affinity_score.final_score == -1) {
+        int64_t max_score =
+            max_min_priority_scores->pod_affinity_priority.max_score;
+        int64_t min_score =
+            max_min_priority_scores->pod_affinity_priority.min_score;
+        if ((max_score - min_score) > 0) {
+          pod_affinity_normalized_score =
+              ((pod_affinity_score.score - min_score) /
+               (max_score - min_score)) *
+              omega_;
+        }
+        pod_affinity_score.final_score = pod_affinity_normalized_score;
+      } else {
+        pod_affinity_normalized_score = pod_affinity_score.final_score;
+      }
+    }
   }
+  
   cost_vector.node_affinity_soft_cost_ =
       omega_ - node_affinity_normalized_score;
+  cost_vector.pod_affinity_soft_cost_ = omega_ - pod_affinity_normalized_score;  
   Cost_t final_cost = FlattenCostVector(cost_vector);
   return ArcDescriptor(final_cost, 1ULL, 0ULL);
 }
@@ -196,6 +238,7 @@ Cost_t CpuCostModel::FlattenCostVector(CpuMemCostVector_t cv) {
   accumulator += cv.cpu_mem_cost_;
   accumulator += cv.balanced_res_cost_;
   accumulator += cv.node_affinity_soft_cost_;
+  accumulator += cv.pod_affinity_soft_cost_;
   if (accumulator > infinity_) infinity_ = accumulator + 1;
   return accumulator;
 }
@@ -341,6 +384,368 @@ void CpuCostModel::CalculatePrioritiesCost(const EquivClass_t ec,
   }
 }
 
+// Pod affinity/anti-affinity
+bool CpuCostModel::MatchExpressionWithPodLabels(
+    const ResourceDescriptor& rd, const LabelSelectorRequirement& expression) {
+  unordered_map<string, vector<TaskID_t>>* label_values =
+      FindOrNull(*labels_map_, expression.key());
+  if (label_values) {
+    for (auto& value : expression.values()) {
+      vector<TaskID_t>* labels_map_tasks = FindOrNull(*label_values, value);
+      if (labels_map_tasks) {
+        for (auto task_id : *labels_map_tasks) {
+          TaskDescriptor* tdp = FindPtrOrNull(*task_map_, task_id);
+          if (tdp) {
+            if (!HasNamespace(tdp->task_namespace())) continue;
+            if (tdp->state() == TaskDescriptor::RUNNING) {
+              ResourceID_t pu_res_id =
+                  ResourceIDFromString(tdp->scheduled_to_resource());
+              ResourceID_t machine_res_id = MachineResIDForResource(pu_res_id);
+              ResourceID_t res_id = ResourceIDFromString(rd.uuid());
+              if (machine_res_id == res_id) {
+                return true;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
+bool CpuCostModel::NotMatchExpressionWithPodLabels(
+    const ResourceDescriptor& rd, const LabelSelectorRequirement& expression) {
+  bool namespace_match = false;
+  unordered_map<string, vector<TaskID_t>>* label_values =
+      FindOrNull(*labels_map_, expression.key());
+  if (label_values) {
+    for (auto& value : expression.values()) {
+      vector<TaskID_t>* labels_map_tasks = FindOrNull(*label_values, value);
+      if (labels_map_tasks) {
+        for (auto task_id : *labels_map_tasks) {
+          TaskDescriptor* tdp = FindPtrOrNull(*task_map_, task_id);
+          if (tdp) {
+            if (tdp->state() == TaskDescriptor::RUNNING) {
+              ResourceID_t pu_res_id =
+                  ResourceIDFromString(tdp->scheduled_to_resource());
+              ResourceID_t machine_res_id = MachineResIDForResource(pu_res_id);
+              ResourceID_t res_id = ResourceIDFromString(rd.uuid());
+              if (machine_res_id == res_id) {
+                return false;
+              }
+            }
+          }
+          if (HasNamespace(tdp->task_namespace())) namespace_match = true;
+        }
+      }
+    }
+  }
+  if (namespace_match == false) return false;
+  return true;
+}
+
+bool CpuCostModel::MatchExpressionKeyWithPodLabels(
+    const ResourceDescriptor& rd, const LabelSelectorRequirement& expression) {
+  unordered_map<string, vector<TaskID_t>>* label_values =
+      FindOrNull(*labels_map_, expression.key());
+  if (label_values) {
+    for (auto it = label_values->begin(); it != label_values->end(); it++) {
+      for (auto task_id : it->second) {
+        TaskDescriptor* tdp = FindPtrOrNull(*task_map_, task_id);
+        if (tdp) {
+          if (!HasNamespace(tdp->task_namespace())) continue;
+          if (tdp->state() == TaskDescriptor::RUNNING) {
+            ResourceID_t pu_res_id =
+                ResourceIDFromString(tdp->scheduled_to_resource());
+            ResourceID_t machine_res_id = MachineResIDForResource(pu_res_id);
+            ResourceID_t res_id = ResourceIDFromString(rd.uuid());
+            if (machine_res_id == res_id) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
+bool CpuCostModel::NotMatchExpressionKeyWithPodLabels(
+    const ResourceDescriptor& rd, const LabelSelectorRequirement& expression) {
+  bool namespace_match = false;
+  unordered_map<string, vector<TaskID_t>>* label_values =
+      FindOrNull(*labels_map_, expression.key());
+  if (label_values) {
+    for (auto it = label_values->begin(); it != label_values->end(); it++) {
+      for (auto task_id : it->second) {
+        TaskDescriptor* tdp = FindPtrOrNull(*task_map_, task_id);
+        if (tdp) {
+          if (tdp->state() == TaskDescriptor::RUNNING) {
+            ResourceID_t pu_res_id =
+                ResourceIDFromString(tdp->scheduled_to_resource());
+            ResourceID_t machine_res_id = MachineResIDForResource(pu_res_id);
+            ResourceID_t res_id = ResourceIDFromString(rd.uuid());
+            if (machine_res_id == res_id) {
+              return false;
+            }
+          }
+        }
+        if (HasNamespace(tdp->task_namespace())) namespace_match = true;
+      }
+    }
+  }
+  if (namespace_match == false) return false;
+  return true;
+}
+
+bool CpuCostModel::SatisfiesPodAntiAffinityMatchExpression(
+    const ResourceDescriptor& rd,
+    const LabelSelectorRequirementAntiAff& expression) {
+  LabelSelectorRequirement expression_selector;
+  expression_selector.set_key(expression.key());
+  expression_selector.set_operator_(expression.operator_());
+  for (auto& value : expression.values()) {
+    expression_selector.add_values(value);
+  }
+  if (expression.operator_() == std::string("In")) {
+    if (!MatchExpressionWithPodLabels(rd, expression_selector)) return true;
+  } else if (expression.operator_() == std::string("NotIn")) {
+    if (!NotMatchExpressionWithPodLabels(rd, expression_selector)) return true;
+  } else if (expression.operator_() == std::string("Exists")) {
+    if (!MatchExpressionKeyWithPodLabels(rd, expression_selector)) return true;
+  } else if (expression.operator_() == std::string("DoesNotExist")) {
+    if (!NotMatchExpressionKeyWithPodLabels(rd, expression_selector))
+      return true;
+  } else {
+    LOG(FATAL) << "Unsupported selector type: " << expression.operator_();
+    return false;
+  }
+  return false;
+}
+
+bool CpuCostModel::SatisfiesPodAffinityMatchExpression(
+    const ResourceDescriptor& rd, const LabelSelectorRequirement& expression) {
+  if (expression.operator_() == std::string("In")) {
+    if (MatchExpressionWithPodLabels(rd, expression)) return true;
+  } else if (expression.operator_() == std::string("NotIn")) {
+    if (NotMatchExpressionWithPodLabels(rd, expression)) return true;
+  } else if (expression.operator_() == std::string("Exists")) {
+    if (MatchExpressionKeyWithPodLabels(rd, expression)) return true;
+  } else if (expression.operator_() == std::string("DoesNotExist")) {
+    if (NotMatchExpressionKeyWithPodLabels(rd, expression)) return true;
+  } else {
+    LOG(FATAL) << "Unsupported selector type: " << expression.operator_();
+    return false;
+  }
+  return false;
+}
+
+bool CpuCostModel::SatisfiesPodAntiAffinityMatchExpressions(
+    const ResourceDescriptor& rd,
+    const RepeatedPtrField<LabelSelectorRequirementAntiAff>& matchexpressions) {
+  for (auto& expression : matchexpressions) {
+    if (SatisfiesPodAntiAffinityMatchExpression(rd, expression)) {
+      continue;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CpuCostModel::SatisfiesPodAffinityMatchExpressions(
+    const ResourceDescriptor& rd,
+    const RepeatedPtrField<LabelSelectorRequirement>& matchexpressions) {
+  for (auto& expression : matchexpressions) {
+    if (SatisfiesPodAffinityMatchExpression(rd, expression)) {
+      continue;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CpuCostModel::SatisfiesPodAntiAffinityTerm(
+    const ResourceDescriptor& rd, const TaskDescriptor& td,
+    const PodAffinityTermAntiAff& term) {
+  if (!term.namespaces_size()) {
+    namespaces.insert(td.task_namespace());
+  } else {
+    for (auto name : term.namespaces()) {
+      namespaces.insert(name);
+    }
+  }
+  if (term.has_labelselector()) {
+    if (term.labelselector().matchexpressions_size()) {
+      if (!SatisfiesPodAntiAffinityMatchExpressions(
+              rd, term.labelselector().matchexpressions()))
+        return false;
+    }
+  }
+  return true;
+}
+
+bool CpuCostModel::SatisfiesPodAffinityTerm(const ResourceDescriptor& rd,
+                                            const TaskDescriptor& td,
+                                            const PodAffinityTerm& term) {
+  if (!term.namespaces_size()) {
+    namespaces.insert(td.task_namespace());
+  } else {
+    for (auto name : term.namespaces()) {
+      namespaces.insert(name);
+    }
+  }
+  if (term.has_labelselector()) {
+    if (term.labelselector().matchexpressions_size()) {
+      if (!SatisfiesPodAffinityMatchExpressions(
+              rd, term.labelselector().matchexpressions()))
+        return false;
+    }
+  }
+  return true;
+}
+
+bool CpuCostModel::SatisfiesPodAntiAffinityTerms(
+    const ResourceDescriptor& rd, const TaskDescriptor& td,
+    const RepeatedPtrField<PodAffinityTermAntiAff>& podantiaffinityterms) {
+  for (auto& term : podantiaffinityterms) {
+    if (!SatisfiesPodAntiAffinityTerm(rd, td, term)) return false;
+  }
+  return true;
+}
+
+bool CpuCostModel::SatisfiesPodAffinityTerms(
+    const ResourceDescriptor& rd, const TaskDescriptor& td,
+    const RepeatedPtrField<PodAffinityTerm>& podaffinityterms) {
+  for (auto& term : podaffinityterms) {
+    if (!SatisfiesPodAffinityTerm(rd, td, term)) return false;
+  }
+  return true;
+}
+
+// Hard constraint check for pod affinity/anti-affinity.
+bool CpuCostModel::SatisfiesPodAffinityAntiAffinityRequired(
+    const ResourceDescriptor& rd, const TaskDescriptor& td) {
+  if (td.has_affinity()) {
+    Affinity affinity = td.affinity();
+    if (affinity.has_pod_anti_affinity()) {
+      if (affinity.pod_anti_affinity()
+              .requiredduringschedulingignoredduringexecution_size()) {
+        if (!SatisfiesPodAntiAffinityTerms(
+                rd, td,
+                affinity.pod_anti_affinity()
+                    .requiredduringschedulingignoredduringexecution())) {
+          return false;
+        }
+      }
+    }
+    if (affinity.has_pod_affinity()) {
+      if (affinity.pod_affinity()
+              .requiredduringschedulingignoredduringexecution_size()) {
+        if (!SatisfiesPodAffinityTerms(
+                rd, td,
+                affinity.pod_affinity()
+                    .requiredduringschedulingignoredduringexecution())) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+// Soft constraint check for pod affinity/anti-affinity.
+void CpuCostModel::CalculatePodAffinityAntiAffinityPreference(
+    const ResourceDescriptor& rd, const TaskDescriptor& td,
+    const EquivClass_t ec) {
+  if (td.has_affinity()) {
+    Affinity affinity = td.affinity();
+    int32_t sum_of_weights = 0;
+    if (affinity.has_pod_anti_affinity()) {
+      if (affinity.pod_anti_affinity()
+              .preferredduringschedulingignoredduringexecution_size()) {
+        for (auto& weightedpodantiaffinityterm :
+             affinity.pod_anti_affinity()
+                 .preferredduringschedulingignoredduringexecution()) {
+          if (!weightedpodantiaffinityterm.weight()) continue;
+          if (weightedpodantiaffinityterm.has_podaffinityterm()) {
+            if (SatisfiesPodAntiAffinityTerm(
+                    rd, td, weightedpodantiaffinityterm.podaffinityterm())) {
+              sum_of_weights += weightedpodantiaffinityterm.weight();
+            }
+          }
+        }
+      }
+    }
+    if (affinity.has_pod_affinity()) {
+      if (affinity.pod_affinity()
+              .preferredduringschedulingignoredduringexecution_size()) {
+        for (auto& weightedpodaffinityterm :
+             affinity.pod_affinity()
+                 .preferredduringschedulingignoredduringexecution()) {
+          if (!weightedpodaffinityterm.weight()) continue;
+          if (weightedpodaffinityterm.has_podaffinityterm()) {
+            if (SatisfiesPodAffinityTerm(
+                    rd, td, weightedpodaffinityterm.podaffinityterm())) {
+              sum_of_weights += weightedpodaffinityterm.weight();
+            }
+          }
+        }
+      }
+    }
+    unordered_map<ResourceID_t, PriorityScoresList_t,
+                  boost::hash<boost::uuids::uuid>>* nodes_priority_scores_ptr =
+        FindOrNull(ec_to_node_priority_scores, ec);
+    if (!nodes_priority_scores_ptr) {
+      unordered_map<ResourceID_t, PriorityScoresList_t,
+                    boost::hash<boost::uuids::uuid>>
+          node_to_priority_scores_map;
+      InsertIfNotPresent(&ec_to_node_priority_scores, ec,
+                         node_to_priority_scores_map);
+      nodes_priority_scores_ptr = FindOrNull(ec_to_node_priority_scores, ec);
+    }
+    CHECK_NOTNULL(nodes_priority_scores_ptr);
+    ResourceID_t res_id = ResourceIDFromString(rd.uuid());
+    PriorityScoresList_t* priority_scores_struct_ptr =
+        FindOrNull(*nodes_priority_scores_ptr, res_id);
+    if (!priority_scores_struct_ptr) {
+      PriorityScoresList_t priority_scores_list;
+      InsertIfNotPresent(nodes_priority_scores_ptr, res_id,
+                         priority_scores_list);
+      priority_scores_struct_ptr =
+          FindOrNull(*nodes_priority_scores_ptr, res_id);
+    }
+    CHECK_NOTNULL(priority_scores_struct_ptr);
+    PriorityScore_t& pod_affinity_score =
+        priority_scores_struct_ptr->pod_affinity_priority;
+    if (!sum_of_weights) {
+      pod_affinity_score.satisfy = false;
+    }
+    pod_affinity_score.score = sum_of_weights;
+    MinMaxScores_t* max_min_priority_scores =
+        FindOrNull(ec_to_max_min_priority_scores, ec);
+    if (!max_min_priority_scores) {
+      MinMaxScores_t priority_scores_list;
+      InsertIfNotPresent(&ec_to_max_min_priority_scores, ec,
+                         priority_scores_list);
+      max_min_priority_scores = FindOrNull(ec_to_max_min_priority_scores, ec);
+    }
+    CHECK_NOTNULL(max_min_priority_scores);
+    MinMaxScore_t& min_max_pod_affinity_score =
+        max_min_priority_scores->pod_affinity_priority;
+    if (min_max_pod_affinity_score.max_score < sum_of_weights ||
+        min_max_pod_affinity_score.max_score == -1) {
+      min_max_pod_affinity_score.max_score = sum_of_weights;
+    }
+    if (min_max_pod_affinity_score.min_score > sum_of_weights ||
+        min_max_pod_affinity_score.min_score == -1) {
+      min_max_pod_affinity_score.min_score = sum_of_weights;
+    }
+  }
+}
+
 vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
     EquivClass_t ec) {
   vector<EquivClass_t>* pref_ecs = new vector<EquivClass_t>();
@@ -364,6 +769,12 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
           CalculatePrioritiesCost(ec, rd);
         } else
           continue;
+        // Checking pod affinity/anti-affinity
+        if (SatisfiesPodAffinityAntiAffinityRequired(rd, *td_ptr)) {
+          CalculatePodAffinityAntiAffinityPreference(rd, *td_ptr, ec);
+        } else {
+          continue;
+        }
       }
       CpuMemResVector_t available_resources;
       available_resources.cpu_cores_ =

@@ -89,4 +89,6 @@ message TaskDescriptor {
   repeated LabelSelector label_selectors = 33;
   /* Affinity */
   Affinity affinity = 34;
+  // Namespace
+  string task_namespace = 35;
 }
