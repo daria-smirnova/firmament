@@ -90,11 +90,14 @@ FlowScheduler::FlowScheduler(
     ResourceID_t coordinator_res_id,
     const string& coordinator_uri,
     TimeInterface* time_manager,
-    TraceGenerator* trace_generator)
+    TraceGenerator* trace_generator,
+    unordered_map<string, unordered_map<string, vector<TaskID_t>>>* labels_map,
+    vector<TaskID_t> *affinity_antiaffinity_tasks)
     : EventDrivenScheduler(job_map, resource_map, resource_topology,
                            object_store, task_map, knowledge_base, topo_mgr,
                            m_adapter, event_notifier, coordinator_res_id,
-                           coordinator_uri, time_manager, trace_generator),
+                           coordinator_uri, time_manager, trace_generator,
+                           labels_map, affinity_antiaffinity_tasks),
       topology_manager_(topo_mgr),
       last_updated_time_dependent_costs_(0ULL),
       leaf_res_ids_(new unordered_set<ResourceID_t,
@@ -149,7 +152,8 @@ FlowScheduler::FlowScheduler(
       VLOG(1) << "Using the net cost model";
       break;
     case CostModelType::COST_MODEL_CPU:
-      cost_model_ = new CpuCostModel(resource_map, task_map, knowledge_base);
+      cost_model_ = 
+          new CpuCostModel(resource_map, task_map, knowledge_base, labels_map);
       VLOG(1) << "Using the cpu cost model";
       break;
     case CostModelType::COST_MODEL_QUINCY_INTERFERENCE:
@@ -367,6 +371,16 @@ void FlowScheduler::HandleTaskPlacement(TaskDescriptor* td_ptr,
   td_ptr->set_scheduled_to_resource(rd_ptr->uuid());
   flow_graph_manager_->TaskScheduled(td_ptr->uid(),
                                      ResourceIDFromString(rd_ptr->uuid()));
+  // Pod affinity/anti-affinity
+  if (td_ptr->has_affinity() && (td_ptr->affinity().has_pod_affinity() ||
+                                 td_ptr->affinity().has_pod_anti_affinity())) {
+    vector<TaskID_t>::iterator it =
+        find(affinity_antiaffinity_tasks_->begin(),
+             affinity_antiaffinity_tasks_->end(), td_ptr->uid());
+    if (it != affinity_antiaffinity_tasks_->end()) {
+      affinity_antiaffinity_tasks_->erase(it);
+    }
+  }
   EventDrivenScheduler::HandleTaskPlacement(td_ptr, rd_ptr);
 }
 
@@ -417,16 +431,29 @@ uint64_t FlowScheduler::ScheduleAllJobs(SchedulerStats* scheduler_stats) {
   return ScheduleAllJobs(scheduler_stats, NULL);
 }
 
+uint64_t FlowScheduler::ScheduleAllQueueJobs(SchedulerStats* scheduler_stats,
+                                             vector<SchedulingDelta>* deltas) {
+  boost::lock_guard<boost::recursive_mutex> lock(scheduling_lock_);
+  queue_based_schedule = true;
+  uint64_t num_scheduled_tasks = ScheduleAllJobs(scheduler_stats, deltas);
+  queue_based_schedule = false;
+  return num_scheduled_tasks;
+}
+
 uint64_t FlowScheduler::ScheduleAllJobs(SchedulerStats* scheduler_stats,
                                         vector<SchedulingDelta>* deltas) {
   boost::lock_guard<boost::recursive_mutex> lock(scheduling_lock_);
   vector<JobDescriptor*> jobs;
+  //Pod affinity/anti-affinity
+  one_task_runnable = false;
   for (auto& job_id_jd : jobs_to_schedule_) {
     if (ComputeRunnableTasksForJob(job_id_jd.second).size() > 0) {
       jobs.push_back(job_id_jd.second);
     }
   }
   uint64_t num_scheduled_tasks = ScheduleJobs(jobs, scheduler_stats, deltas);
+  //Pod affinity/anti-affinity
+  one_task_runnable = false;
   return num_scheduled_tasks;
 }
 

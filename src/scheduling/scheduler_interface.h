@@ -72,10 +72,15 @@ class SchedulerInterface : public PrintableInterface {
                      shared_ptr<ResourceMap_t> resource_map,
                      ResourceTopologyNodeDescriptor* resource_topology,
                      shared_ptr<ObjectStoreInterface> object_store,
-                     shared_ptr<TaskMap_t> task_map)
+                     shared_ptr<TaskMap_t> task_map,
+                     unordered_map<string, unordered_map<string, vector<TaskID_t>>>*
+                         labels_map,
+                     vector<TaskID_t> *affinity_antiaffinity_tasks)
     : job_map_(job_map), knowledge_base_(knowledge_base),
     resource_map_(resource_map), task_map_(task_map),
-    object_store_(object_store), resource_topology_(resource_topology) {}
+    object_store_(object_store), resource_topology_(resource_topology),
+    labels_map_(labels_map),
+    affinity_antiaffinity_tasks_(affinity_antiaffinity_tasks) {}
 
   /**
    * Adds a new job. The job will be scheduled on the next run of the scheduler
@@ -242,6 +247,14 @@ class SchedulerInterface : public PrintableInterface {
   virtual uint64_t ScheduleAllJobs(SchedulerStats* scheduler_stats) = 0;
   virtual uint64_t ScheduleAllJobs(SchedulerStats* scheduler_stats,
                                    vector<SchedulingDelta>* deltas) = 0;
+ /**
+   * Runs a scheduling iteration for all active queue based jobs.
+   * @return the number of tasks scheduled
+   */
+  virtual uint64_t ScheduleAllQueueJobs(SchedulerStats* scheduler_stats,
+                                        vector<SchedulingDelta>* deltas) {
+  return 0;
+} 
 
   /**
    * Schedules all runnable tasks in a job.
@@ -298,6 +311,9 @@ class SchedulerInterface : public PrintableInterface {
   shared_ptr<store::ObjectStoreInterface> object_store_;
   // Resource topology (including any registered remote resources)
   ResourceTopologyNodeDescriptor* resource_topology_;
+  //Pod affinity/anti-affinity 
+  unordered_map<string, unordered_map<string, vector<TaskID_t>>>* labels_map_;
+  vector<TaskID_t> *affinity_antiaffinity_tasks_;
 };
 
 }  // namespace scheduler

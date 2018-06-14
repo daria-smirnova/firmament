@@ -49,7 +49,8 @@ class CpuCostModelTest : public ::testing::Test {
     resource_map_.reset(new ResourceMap_t);
     task_map_.reset(new TaskMap_t);
     knowledge_base_.reset(new KnowledgeBase);
-    cost_model = new CpuCostModel(resource_map_, task_map_, knowledge_base_);
+    cost_model =
+        new CpuCostModel(resource_map_, task_map_, knowledge_base_, NULL);
   }
 
   virtual ~CpuCostModelTest() {
@@ -112,7 +113,7 @@ TEST_F(CpuCostModelTest, AddTask) {
   TaskID_t task_id = td_ptr->uid();
   td_ptr->mutable_resource_request()->set_cpu_cores(10.0);
   cost_model->AddTask(task_id);
-  unordered_map<TaskID_t, CpuMemCostVector_t>::iterator it =
+  unordered_map<TaskID_t, CpuMemResVector_t>::iterator it =
       cost_model->task_resource_requirement_.find(task_id);
   EXPECT_NE(cost_model->task_resource_requirement_.end(), it);
   EXPECT_FLOAT_EQ(10.0, it->second.cpu_cores_);
@@ -162,8 +163,8 @@ TEST_F(CpuCostModelTest, EquivClassToEquivClass) {
   // Calculate cost of arc between main EC and second machine EC.
   ArcDescriptor arc_cost2 = cost_model->EquivClassToEquivClass(
       (*equiv_classes)[0], machine_equiv_classes[1]);
-  EXPECT_EQ(2000, arc_cost1.cost_);
-  EXPECT_EQ(2051, arc_cost2.cost_);
+  EXPECT_EQ(1500, arc_cost1.cost_);
+  EXPECT_EQ(1525, arc_cost2.cost_);
   // Cost of arc between main EC and first machine EC should be less than
   // cost of arc between main EC and second machine EC.
   EXPECT_LT(arc_cost1.cost_, arc_cost2.cost_);
@@ -292,7 +293,7 @@ TEST_F(CpuCostModelTest, GatherStats) {
   sink_node->type_ = FlowNodeType::SINK;
   // Test GatherStats from sink to PU.
   cost_model->GatherStats(pu_node, sink_node);
-  // Verifying number of slots, runnning tasks on PU.
+  // Verifying number of slots, running tasks on PU.
   EXPECT_EQ(2U, rd_ptr2->num_running_tasks_below());
   EXPECT_EQ(FLAGS_max_tasks_per_pu, rd_ptr2->num_slots_below());
   // Test GatherStats from PU to Machine.

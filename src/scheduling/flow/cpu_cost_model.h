@@ -35,16 +35,53 @@
 
 namespace firmament {
 
-typedef struct CpuMemCostVector {
+struct CpuMemCostVector_t {
+  // record number of dimensions here
+  static const int16_t dimensions_ = 3;
+  uint64_t cpu_mem_cost_;
+  uint64_t balanced_res_cost_;
+  uint64_t node_affinity_soft_cost_;
+  uint64_t pod_affinity_soft_cost_;
+  CpuMemCostVector_t()
+      : cpu_mem_cost_(0), balanced_res_cost_(0), node_affinity_soft_cost_(0), pod_affinity_soft_cost_(0) {}
+};
+
+struct CpuMemResVector_t {
   uint64_t cpu_cores_;
   uint64_t ram_cap_;
-} CpuMemCostVector_t;
+};
+
+struct MinMaxScore_t {
+  int64_t min_score;
+  int64_t max_score;
+  MinMaxScore_t() : min_score(-1), max_score(-1) {}
+};
+
+struct MinMaxScores_t {
+  MinMaxScore_t node_affinity_priority;
+  MinMaxScore_t pod_affinity_priority;
+};
+
+struct PriorityScore_t {
+  // Flag that indicates whether soft constraints are satisfied or not.
+  bool satisfy;
+  int64_t score;
+  int64_t final_score;
+  PriorityScore_t() : satisfy(true), score(0), final_score(-1) {}
+};
+
+struct PriorityScoresList_t {
+  PriorityScore_t node_affinity_priority;
+  PriorityScore_t pod_affinity_priority;
+};
 
 class CpuCostModel : public CostModelInterface {
  public:
   CpuCostModel(shared_ptr<ResourceMap_t> resource_map,
                shared_ptr<TaskMap_t> task_map,
-               shared_ptr<KnowledgeBase> knowledge_base);
+               shared_ptr<KnowledgeBase> knowledge_base,
+               unordered_map<string, unordered_map<string, vector<TaskID_t>>>*
+                   labels_map);
   // Costs pertaining to leaving tasks unscheduled
   ArcDescriptor TaskToUnscheduledAgg(TaskID_t task_id);
   ArcDescriptor UnscheduledAggToSink(JobID_t job_id);
@@ -61,10 +98,52 @@ class CpuCostModel : public CostModelInterface {
   ArcDescriptor TaskToEquivClassAggregator(TaskID_t task_id, EquivClass_t tec);
   ArcDescriptor EquivClassToResourceNode(EquivClass_t tec, ResourceID_t res_id);
   ArcDescriptor EquivClassToEquivClass(EquivClass_t tec1, EquivClass_t tec2);
+  // Calculate costs pertaining to pod priorities such node affinity, pod
+  // affinity etc.
+  void CalculatePrioritiesCost(const EquivClass_t ec,
+                               const ResourceDescriptor& rd);
   // Get the type of equiv class.
   vector<EquivClass_t>* GetTaskEquivClasses(TaskID_t task_id);
   vector<ResourceID_t>* GetOutgoingEquivClassPrefArcs(EquivClass_t tec);
   vector<ResourceID_t>* GetTaskPreferenceArcs(TaskID_t task_id);
+  // Pod anti-affinity
+  bool MatchExpressionWithPodLabels(const ResourceDescriptor& rd,
+                                    const LabelSelectorRequirement& expression);
+  bool NotMatchExpressionWithPodLabels(
+      const ResourceDescriptor& rd, const LabelSelectorRequirement& expression);
+  bool MatchExpressionKeyWithPodLabels(
+      const ResourceDescriptor& rd, const LabelSelectorRequirement& expression);
+  bool NotMatchExpressionKeyWithPodLabels(
+      const ResourceDescriptor& rd, const LabelSelectorRequirement& expression);
+  bool SatisfiesPodAntiAffinityMatchExpression(
+      const ResourceDescriptor& rd,
+      const LabelSelectorRequirementAntiAff& expression);
+  bool SatisfiesPodAffinityMatchExpression(
+      const ResourceDescriptor& rd, const LabelSelectorRequirement& expression);
+  bool SatisfiesPodAntiAffinityMatchExpressions(
+      const ResourceDescriptor& rd,
+      const RepeatedPtrField<LabelSelectorRequirementAntiAff>&
+          matchexpressions);
+  bool SatisfiesPodAffinityMatchExpressions(
+      const ResourceDescriptor& rd,
+      const RepeatedPtrField<LabelSelectorRequirement>& matchexpressions);
+  bool SatisfiesPodAntiAffinityTerm(const ResourceDescriptor& rd,
+                                    const TaskDescriptor& td,
+                                    const PodAffinityTermAntiAff& term);
+  bool SatisfiesPodAffinityTerm(const ResourceDescriptor& rd,
+                                const TaskDescriptor& td,
+                                const PodAffinityTerm& term);
+  bool SatisfiesPodAntiAffinityTerms(
+      const ResourceDescriptor& rd, const TaskDescriptor& td,
+      const RepeatedPtrField<PodAffinityTermAntiAff>& podantiaffinityterms);
+  bool SatisfiesPodAffinityTerms(
+      const ResourceDescriptor& rd, const TaskDescriptor& td,
+      const RepeatedPtrField<PodAffinityTerm>& podaffinityterms);
+  bool SatisfiesPodAffinityAntiAffinityRequired(const ResourceDescriptor& rd,
+                                                const TaskDescriptor& td);
+  void CalculatePodAffinityAntiAffinityPreference(const ResourceDescriptor& rd,
+                                                  const TaskDescriptor& td,
+                                                  const EquivClass_t ec);
   vector<EquivClass_t>* GetEquivClassToEquivClassesArcs(EquivClass_t tec);
   void AddMachine(ResourceTopologyNodeDescriptor* rtnd_ptr);
   void AddTask(TaskID_t task_id);
@@ -78,6 +157,8 @@ class CpuCostModel : public CostModelInterface {
   // Fixed value for OMEGA, the normalization ceiling for each dimension's cost
   // value
   const Cost_t omega_ = 1000;
+  // Largest cost seen so far, plus one
+  Cost_t infinity_;
   FRIEND_TEST(CpuCostModelTest, AddMachine);
   FRIEND_TEST(CpuCostModelTest, AddTask);
   FRIEND_TEST(CpuCostModelTest, EquivClassToEquivClass);
@@ -86,15 +167,20 @@ class CpuCostModel : public CostModelInterface {
   FRIEND_TEST(CpuCostModelTest, GetOutgoingEquivClassPrefArcs);
   FRIEND_TEST(CpuCostModelTest, GetTaskEquivClasses);
   FRIEND_TEST(CpuCostModelTest, MachineResIDForResource);
-  // TODO(jagadish): Fixed value of some big positive number which needs to added to cost to keep cost
-  // positive. We need to come up with correct formula in future.
-  const Cost_t max_sum_of_weights = 1000;
+  Cost_t FlattenCostVector(CpuMemCostVector_t cv);
   EquivClass_t GetMachineEC(const string& machine_name, uint64_t ec_index);
   ResourceID_t MachineResIDForResource(ResourceID_t res_id);
   inline const TaskDescriptor& GetTask(TaskID_t task_id) {
     TaskDescriptor* td = FindPtrOrNull(*task_map_, task_id);
     CHECK_NOTNULL(td);
     return *td;
+  }
+  inline bool HasNamespace(const string name) {
+    if (namespaces.find(name) == namespaces.end()) {
+      return false;
+    } else {
+      return true;
+    }
   }
 
   shared_ptr<ResourceMap_t> resource_map_;
@@ -104,10 +190,10 @@ class CpuCostModel : public CostModelInterface {
   shared_ptr<KnowledgeBase> knowledge_base_;
   unordered_map<TaskID_t, float> task_cpu_cores_requirement_;
   unordered_map<TaskID_t, uint64_t> task_rx_bw_requirement_;
-  unordered_map<TaskID_t, CpuMemCostVector_t> task_resource_requirement_;
+  unordered_map<TaskID_t, CpuMemResVector_t> task_resource_requirement_;
   unordered_map<EquivClass_t, float> ec_cpu_cores_requirement_;
   unordered_map<EquivClass_t, uint64_t> ec_rx_bw_requirement_;
-  unordered_map<EquivClass_t, CpuMemCostVector_t> ec_resource_requirement_;
+  unordered_map<EquivClass_t, CpuMemResVector_t> ec_resource_requirement_;
   unordered_map<ResourceID_t, vector<EquivClass_t>, boost::hash<ResourceID_t>>
       ecs_for_machines_;
   unordered_map<EquivClass_t, ResourceID_t> ec_to_machine_;
@@ -115,6 +201,13 @@ class CpuCostModel : public CostModelInterface {
   unordered_map<EquivClass_t, const RepeatedPtrField<LabelSelector>>
       ec_to_label_selectors;
   unordered_map<EquivClass_t, const TaskDescriptor> ec_to_td_requirements;
+  unordered_map<EquivClass_t, unordered_map<ResourceID_t, PriorityScoresList_t,
+                                            boost::hash<boost::uuids::uuid>>>
+      ec_to_node_priority_scores;
+  unordered_map<EquivClass_t, MinMaxScores_t> ec_to_max_min_priority_scores;
+  // Pod affinity/anti-affinity
+  unordered_map<string, unordered_map<string, vector<TaskID_t>>>* labels_map_;
+  unordered_set<string> namespaces;
 };
 
 }  // namespace firmament
