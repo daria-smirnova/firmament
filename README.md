@@ -31,6 +31,7 @@ Firmament is currently known to work on Ubuntu LTS releases 12.04 (precise) and
 (saucy); it does NOT work on other versions prior to 12.10 (quantal) as they
 cannot build libpion, which is now included as a self-built dependency in order
 to ease transition to libpion v5 and for compatibility with Arch Linux.
+Packages required for Ubuntu to build Firmament are listed in files pkglist.Ubuntu-<release_version> [here](https://github.com/Huawei-PaaS/firmament/tree/dev/include).
 
 Other configurations are untested - YMMV. Recent Debian versions typically work
 with a bit of fiddling of the build configuration files in the `include`
