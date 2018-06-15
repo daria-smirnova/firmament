@@ -42,6 +42,10 @@ RepeatedPtrField<LabelSelector> NodeSelectorRequirementsAsLabelSelectors(
       type = 2;
     else if (operator_type == "DoesNotExist")
       type = 3;
+    else if (operator_type == "Gt")
+      type = 4;
+    else if (operator_type == "Lt")
+      type = 5;
     selector.set_type(static_cast<LabelSelector_SelectorType>(type));
     for (auto& value : nsm.values()) {
       selector.add_values(value);
@@ -176,6 +180,20 @@ bool SatisfiesLabelSelector(const unordered_map<string, string>& rd_labels,
     }
     case LabelSelector::NOT_EXISTS_KEY: {
       return !ContainsKey(rd_labels, selector.key());
+    }
+    case LabelSelector::GREATER_THAN: {
+      const string* value = FindOrNull(rd_labels, selector.key());
+      if (value != NULL) {
+        return (stoi(*value) > stoi(*selector_values.begin()));
+      }
+      return false;
+    }
+    case LabelSelector::LESSER_THAN: {
+      const string* value = FindOrNull(rd_labels, selector.key());
+      if (value != NULL) {
+        return (stoi(*value) < stoi(*selector_values.begin()));
+      }
+      return false;
     }
     default:
       LOG(FATAL) << "Unsupported selector type: " << selector.type();
