@@ -70,6 +70,8 @@ DEFINE_bool(reschedule_tasks_upon_node_failure, true, "True if tasks that were "
 
 DECLARE_string(flow_scheduling_solver);
 DECLARE_bool(flowlessly_flip_algorithms);
+DEFINE_bool(resource_stats_update_based_on_resource_reservation, true,
+            "Set this false when you have external machine stats server");
 
 namespace firmament {
 namespace scheduler {
@@ -203,39 +205,67 @@ uint64_t FlowScheduler::ApplySchedulingDeltas(
       // We should not get any NOOP deltas as they get filtered before.
       continue;
     } else if (delta->type() == SchedulingDelta::PLACE) {
-      // Resource stats simulation
-      ResourceStats resource_stats;
-      CpuStats* cpu_stats = resource_stats.add_cpus_stats();
-      bool have_sample =
-        knowledge_base_->GetLatestStatsForMachine(ResourceIDFromString(rs->mutable_topology_node()->parent_id()), &resource_stats);
-      if(have_sample) {
-            cpu_stats->set_cpu_allocatable(cpu_stats->cpu_allocatable() - td_ptr->resource_request().cpu_cores());
-            resource_stats.set_mem_allocatable(resource_stats.mem_allocatable() - td_ptr->resource_request().ram_cap());
-            //LOG(INFO) << "DEBUG: While applying PLACE scheduling deltas after iteration: \n"
-            //          << "CPU CAP: " << cpu_stats->cpu_capacity() << ", " << "CPU ALLOC: " << cpu_stats->cpu_allocatable() << "\n"
-            //          << "MEM CAP: " << resource_stats.mem_capacity() << ", " << "MEM ALLOC: " << resource_stats.mem_allocatable();
-            knowledge_base_->AddMachineSample(resource_stats);
+      // Update the knowlege base with resource stats samples based on tasks
+      // resource requeset, when we do not have external dynamic resource
+      // stats provider like heapster in kubernetes.
+      if (FLAGS_resource_stats_update_based_on_resource_reservation) {
+        ResourceStats resource_stats;
+        CpuStats* cpu_stats = resource_stats.add_cpus_stats();
+        bool have_sample = knowledge_base_->GetLatestStatsForMachine(
+            ResourceIDFromString(rs->mutable_topology_node()->parent_id()),
+            &resource_stats);
+        if (have_sample) {
+          cpu_stats->set_cpu_allocatable(
+              cpu_stats->cpu_allocatable() -
+              td_ptr->resource_request().cpu_cores());
+          resource_stats.set_mem_allocatable(
+              resource_stats.mem_allocatable() -
+              td_ptr->resource_request().ram_cap());
+          double cpu_utilization =
+              (cpu_stats->cpu_capacity() - cpu_stats->cpu_allocatable()) /
+              (double)cpu_stats->cpu_capacity();
+          cpu_stats->set_cpu_utilization(cpu_utilization);
+          double mem_utilization = (resource_stats.mem_capacity() -
+                                    resource_stats.mem_allocatable()) /
+                                   (double)resource_stats.mem_capacity();
+          resource_stats.set_mem_utilization(mem_utilization);
+          knowledge_base_->AddMachineSample(resource_stats);
+        }
       }
       // Tag the job to which this task belongs as running
       JobDescriptor* jd =
-        FindOrNull(*job_map_, JobIDFromString(td_ptr->job_id()));
+          FindOrNull(*job_map_, JobIDFromString(td_ptr->job_id()));
       if (jd->state() != JobDescriptor::RUNNING)
         jd->set_state(JobDescriptor::RUNNING);
       HandleTaskPlacement(td_ptr, rs->mutable_descriptor());
       num_scheduled++;
     } else if (delta->type() == SchedulingDelta::PREEMPT) {
-      // Resource stats simulation
-      ResourceStats resource_stats;
-      CpuStats* cpu_stats = resource_stats.add_cpus_stats();
-      bool have_sample =
-        knowledge_base_->GetLatestStatsForMachine(ResourceIDFromString(rs->mutable_topology_node()->parent_id()), &resource_stats);
-      if(have_sample) {
-            cpu_stats->set_cpu_allocatable(cpu_stats->cpu_allocatable() + td_ptr->resource_request().cpu_cores());
-            resource_stats.set_mem_allocatable(resource_stats.mem_allocatable() + td_ptr->resource_request().ram_cap());
-            //LOG(INFO) << "DEBUG: While applying PREEMPT scheduling deltas after iteration: \n"
-            //          << "CPU CAP: " << cpu_stats->cpu_capacity() << ", " << "CPU ALLOC: " << cpu_stats->cpu_allocatable() << "\n"
-            //          << "MEM CAP: " << resource_stats.mem_capacity() << ", " << "MEM ALLOC: " << resource_stats.mem_allocatable();
-            knowledge_base_->AddMachineSample(resource_stats);
+      // Update the knowlege base with resource stats samples based on tasks
+      // resource requeset, when we do not have external dynamic resource
+      // stats provider like heapster in kubernetes.
+      if (FLAGS_resource_stats_update_based_on_resource_reservation) {
+        ResourceStats resource_stats;
+        CpuStats* cpu_stats = resource_stats.add_cpus_stats();
+        bool have_sample = knowledge_base_->GetLatestStatsForMachine(
+            ResourceIDFromString(rs->mutable_topology_node()->parent_id()),
+            &resource_stats);
+        if (have_sample) {
+          cpu_stats->set_cpu_allocatable(
+              cpu_stats->cpu_allocatable() +
+              td_ptr->resource_request().cpu_cores());
+          resource_stats.set_mem_allocatable(
+              resource_stats.mem_allocatable() +
+              td_ptr->resource_request().ram_cap());
+          double cpu_utilization =
+              (cpu_stats->cpu_capacity() - cpu_stats->cpu_allocatable()) /
+              (double)cpu_stats->cpu_capacity();
+          cpu_stats->set_cpu_utilization(cpu_utilization);
+          double mem_utilization = (resource_stats.mem_capacity() -
+                                    resource_stats.mem_allocatable()) /
+                                   (double)resource_stats.mem_capacity();
+          resource_stats.set_mem_utilization(mem_utilization);
+          knowledge_base_->AddMachineSample(resource_stats);
+        }
       }
       HandleTaskEviction(td_ptr, rs->mutable_descriptor());
     } else if (delta->type() == SchedulingDelta::MIGRATE) {

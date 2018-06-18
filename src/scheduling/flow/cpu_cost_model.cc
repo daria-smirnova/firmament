@@ -36,10 +36,10 @@ DECLARE_uint64(max_tasks_per_pu);
 
 namespace firmament {
 
-CpuCostModel::CpuCostModel(shared_ptr<ResourceMap_t> resource_map,
-                           shared_ptr<TaskMap_t> task_map,
-                           shared_ptr<KnowledgeBase> knowledge_base,
-                           unordered_map<string, unordered_map<string, vector<TaskID_t>>>* labels_map)
+CpuCostModel::CpuCostModel(
+    shared_ptr<ResourceMap_t> resource_map, shared_ptr<TaskMap_t> task_map,
+    shared_ptr<KnowledgeBase> knowledge_base,
+    unordered_map<string, unordered_map<string, vector<TaskID_t>>>* labels_map)
     : resource_map_(resource_map),
       task_map_(task_map),
       knowledge_base_(knowledge_base),
@@ -47,6 +47,20 @@ CpuCostModel::CpuCostModel(shared_ptr<ResourceMap_t> resource_map,
   // Set an initial value for infinity -- this overshoots a bit; would be nice
   // to have a tighter bound based on actual costs observed
   infinity_ = omega_ * CpuMemCostVector_t::dimensions_;
+}
+
+void CpuCostModel::AccumulateResourceStats(ResourceDescriptor* accumulator,
+                                           ResourceDescriptor* other) {
+  // Track the aggregate available resources below the machine node
+  ResourceVector* acc_avail = accumulator->mutable_available_resources();
+  ResourceVector* other_avail = other->mutable_available_resources();
+  acc_avail->set_cpu_cores(acc_avail->cpu_cores() + other_avail->cpu_cores());
+  // Running/idle task count
+  accumulator->set_num_running_tasks_below(
+      accumulator->num_running_tasks_below() +
+      other->num_running_tasks_below());
+  accumulator->set_num_slots_below(accumulator->num_slots_below() +
+                                   other->num_slots_below());
 }
 
 ArcDescriptor CpuCostModel::TaskToUnscheduledAgg(TaskID_t task_id) {
@@ -121,6 +135,7 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
                                    ec_index * resource_request->cpu_cores_;
   available_resources.ram_cap_ = rd.available_resources().ram_cap() -
                                  ec_index * resource_request->ram_cap_;
+
   // Expressing Least Requested Priority.
   float cpu_fraction =
       ((rd.resource_capacity().cpu_cores() - available_resources.cpu_cores_) /
@@ -187,7 +202,7 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
         }
       }
     }
-    
+
     // Expressing pod affinity/anti-affinity priority scores.
     if ((affinity.has_pod_affinity() &&
          affinity.pod_affinity()
@@ -225,10 +240,10 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
       }
     }
   }
-  
+
   cost_vector.node_affinity_soft_cost_ =
       omega_ - node_affinity_normalized_score;
-  cost_vector.pod_affinity_soft_cost_ = omega_ - pod_affinity_normalized_score;  
+  cost_vector.pod_affinity_soft_cost_ = omega_ - pod_affinity_normalized_score;
   Cost_t final_cost = FlattenCostVector(cost_vector);
   return ArcDescriptor(final_cost, 1ULL, 0ULL);
 }
@@ -854,44 +869,54 @@ FlowGraphNode* CpuCostModel::GatherStats(FlowGraphNode* accumulator,
   if (!accumulator->IsResourceNode()) {
     return accumulator;
   }
-
-  if (other->resource_id_.is_nil()) {
-    // The other node is not a resource node.
-    if (other->type_ == FlowNodeType::SINK) {
-      accumulator->rd_ptr_->set_num_running_tasks_below(static_cast<uint64_t>(
-          accumulator->rd_ptr_->current_running_tasks_size()));
-      accumulator->rd_ptr_->set_num_slots_below(FLAGS_max_tasks_per_pu);
-    }
+  if (accumulator->type_ == FlowNodeType::COORDINATOR) {
     return accumulator;
   }
-
-  CHECK_NOTNULL(other->rd_ptr_);
   ResourceDescriptor* rd_ptr = accumulator->rd_ptr_;
   CHECK_NOTNULL(rd_ptr);
-  if (accumulator->type_ == FlowNodeType::MACHINE) {
+  if (accumulator->type_ == FlowNodeType::PU) {
+    CHECK(other->resource_id_.is_nil());
+    ResourceStats latest_stats;
+    ResourceID_t machine_res_id =
+        MachineResIDForResource(accumulator->resource_id_);
+    bool have_sample = knowledge_base_->GetLatestStatsForMachine(machine_res_id,
+                                                                 &latest_stats);
+    if (have_sample) {
+      VLOG(2) << "Updating PU " << accumulator->resource_id_ << "'s "
+              << "resource stats!";
+      // Get the CPU stats for this PU
+      string label = rd_ptr->friendly_name();
+      uint64_t idx = label.find("PU #");
+      if (idx != string::npos) {
+        string core_id_substr = label.substr(idx + 4, label.size() - idx - 4);
+        uint32_t core_id = strtoul(core_id_substr.c_str(), 0, 10);
+        float available_cpu_cores =
+            latest_stats.cpus_stats(core_id).cpu_capacity() *
+            (1.0 - latest_stats.cpus_stats(core_id).cpu_utilization());
+        rd_ptr->mutable_available_resources()->set_cpu_cores(
+            available_cpu_cores);
+      }
+      // Running/idle task count
+      rd_ptr->set_num_running_tasks_below(rd_ptr->current_running_tasks_size());
+      rd_ptr->set_num_slots_below(FLAGS_max_tasks_per_pu);
+      return accumulator;
+    }
+  } else if (accumulator->type_ == FlowNodeType::MACHINE) {
     // Grab the latest available resource sample from the machine
     ResourceStats latest_stats;
     // Take the most recent sample for now
     bool have_sample = knowledge_base_->GetLatestStatsForMachine(
         accumulator->resource_id_, &latest_stats);
     if (have_sample) {
-      // LOG(INFO) << "DEBUG: Size of cpu stats: " <<
-      // latest_stats.cpus_stats_size();
-      // uint32_t core_id = 0;
-      float available_cpu_cores = latest_stats.cpus_stats(0).cpu_allocatable();
-      // latest_stats.cpus_stats(core_id).cpu_capacity() *
-      // (1.0 - latest_stats.cpus_stats(core_id).cpu_utilization());
-      // auto available_ram_cap = latest_stats.mem_capacity() *
-      auto available_ram_cap = latest_stats.mem_allocatable();
-      // (1.0 - latest_stats.mem_utilization());
-      // LOG(INFO) << "DEBUG: Stats from latest machine sample: "
-      //          << "Available cpu: " << available_cpu_cores << "\n"
-      //          << "Available mem: " << available_ram_cap;
-      rd_ptr->mutable_available_resources()->set_cpu_cores(available_cpu_cores);
-      rd_ptr->mutable_available_resources()->set_ram_cap(available_ram_cap);
+      VLOG(2) << "Updating machine " << accumulator->resource_id_ << "'s "
+              << "resource stats!";
+      rd_ptr->mutable_available_resources()->set_ram_cap(
+          latest_stats.mem_capacity() * (1.0 - latest_stats.mem_utilization()));
+    }
+    if (accumulator->rd_ptr_ && other->rd_ptr_) {
+      AccumulateResourceStats(accumulator->rd_ptr_, other->rd_ptr_);
     }
   }
-
   return accumulator;
 }
 
@@ -902,6 +927,7 @@ void CpuCostModel::PrepareStats(FlowGraphNode* accumulator) {
   CHECK_NOTNULL(accumulator->rd_ptr_);
   accumulator->rd_ptr_->clear_num_running_tasks_below();
   accumulator->rd_ptr_->clear_num_slots_below();
+  accumulator->rd_ptr_->clear_available_resources();
   // Clear maps related to priority scores.
   ec_to_node_priority_scores.clear();
 }

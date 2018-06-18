@@ -57,6 +57,7 @@ DEFINE_string(firmament_scheduler_service_address, "127.0.0.1",
               "The address of the scheduler service");
 DEFINE_string(firmament_scheduler_service_port, "9090",
               "The port of the scheduler service");
+DECLARE_bool(resource_stats_update_based_on_resource_reservation);
 DEFINE_string(service_scheduler, "flow", "Scheduler to use: flow | simple");
 DEFINE_uint64(queue_based_scheduling_time, 1, "Queue Based Schedule run time");
 
@@ -117,21 +118,43 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     // TODO(ionel): Implement!
   }
 
-  void UpdateMachineSamplesToKnowledgeBaseStatically(const TaskDescriptor* td_ptr, bool add) {
+  // Helper function that update the knowledge base with resource stats samples
+  // based on task resource request reservation. We can use this function when
+  // we do not have external dynamic resource stats provider like heapster in
+  // kubernetes. If add is true, then tast resource request is subtracted from
+  // available machine resources. else tast resource request is added back to
+  // available machine resources.
+  void UpdateMachineSamplesToKnowledgeBaseStatically(
+      const TaskDescriptor* td_ptr, bool add) {
     ResourceID_t res_id = ResourceIDFromString(td_ptr->scheduled_to_resource());
     ResourceStatus* rs = FindPtrOrNull(*resource_map_, res_id);
     ResourceStats resource_stats;
     CpuStats* cpu_stats = resource_stats.add_cpus_stats();
-    bool have_sample =
-      knowledge_base_->GetLatestStatsForMachine(ResourceIDFromString(rs->mutable_topology_node()->parent_id()), &resource_stats);
+    bool have_sample = knowledge_base_->GetLatestStatsForMachine(
+        ResourceIDFromString(rs->mutable_topology_node()->parent_id()),
+        &resource_stats);
     if (have_sample) {
       if (add) {
-        cpu_stats->set_cpu_allocatable(cpu_stats->cpu_allocatable() + td_ptr->resource_request().cpu_cores());
-        resource_stats.set_mem_allocatable(resource_stats.mem_allocatable() + td_ptr->resource_request().ram_cap());
+        cpu_stats->set_cpu_allocatable(cpu_stats->cpu_allocatable() +
+                                       td_ptr->resource_request().cpu_cores());
+        resource_stats.set_mem_allocatable(
+            resource_stats.mem_allocatable() +
+            td_ptr->resource_request().ram_cap());
       } else {
-        cpu_stats->set_cpu_allocatable(cpu_stats->cpu_allocatable() - td_ptr->resource_request().cpu_cores());
-        resource_stats.set_mem_allocatable(resource_stats.mem_allocatable() - td_ptr->resource_request().ram_cap());
+        cpu_stats->set_cpu_allocatable(cpu_stats->cpu_allocatable() -
+                                       td_ptr->resource_request().cpu_cores());
+        resource_stats.set_mem_allocatable(
+            resource_stats.mem_allocatable() -
+            td_ptr->resource_request().ram_cap());
       }
+      double cpu_utilization =
+          (cpu_stats->cpu_capacity() - cpu_stats->cpu_allocatable()) /
+          (double)cpu_stats->cpu_capacity();
+      cpu_stats->set_cpu_utilization(cpu_utilization);
+      double mem_utilization =
+          (resource_stats.mem_capacity() - resource_stats.mem_allocatable()) /
+          (double)resource_stats.mem_capacity();
+      resource_stats.set_mem_utilization(mem_utilization);
       knowledge_base_->AddMachineSample(resource_stats);
     }
   }
@@ -141,11 +164,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     SchedulerStats sstat;
     vector<SchedulingDelta> deltas;
     scheduler_->ScheduleAllJobs(&sstat, &deltas);
-    // Extract results
-    if (deltas.size()) {
-      LOG(INFO) << "Got " << deltas.size() << " scheduling deltas";
-    }
-
     // Schedule tasks having pod affinity/anti-affinity
     chrono::high_resolution_clock::time_point start =
         chrono::high_resolution_clock::now();
@@ -158,11 +176,10 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
           chrono::high_resolution_clock::now();
       time_spent = chrono::duration_cast<chrono::seconds>(end - start);
     }
-    if(deltas.size()) {
-      LOG(INFO) << "QueueBasedSchedule: Got " << deltas.size()
-              << " scheduling deltas";
+    // Extract results
+    if (deltas.size()) {
+      LOG(INFO) << "Got " << deltas.size() << " scheduling deltas";
     }
-
     for (auto& d : deltas) {
       // LOG(INFO) << "Delta: " << d.DebugString();
       SchedulingDelta* ret_delta = reply->add_deltas();
@@ -215,7 +232,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     }
   }
 
-
   Status TaskCompleted(ServerContext* context, const TaskUID* tid_ptr,
                        TaskCompletedResponse* reply) override {
     TaskDescriptor* td_ptr = FindPtrOrNull(*task_map_, tid_ptr->task_uid());
@@ -223,11 +239,10 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       reply->set_type(TaskReplyType::TASK_NOT_FOUND);
       return Status::OK;
     }
-    // TODO(jagadish): We need to remove below code once we start
-    // getting machine resource stats samples from poseidon i.e., heapster.
-    // Currently updating machine samples statically based on state of pod.
-    if (!td_ptr->scheduled_to_resource().empty()) {
-      UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
+    if (FLAGS_resource_stats_update_based_on_resource_reservation) {
+      if (!td_ptr->scheduled_to_resource().empty()) {
+        UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
+      }
     }
     JobID_t job_id = JobIDFromString(td_ptr->job_id());
     JobDescriptor* jd_ptr = FindOrNull(*job_map_, job_id);
@@ -261,11 +276,10 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       reply->set_type(TaskReplyType::TASK_NOT_FOUND);
       return Status::OK;
     }
-    // TODO(jagadish): We need to remove below code once we start
-    // getting machine resource stats samples from poseidon i.e., heapster.
-    // Currently updating machine samples statically based on state of pod.
-    if (!td_ptr->scheduled_to_resource().empty()) {
-      UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
+    if (FLAGS_resource_stats_update_based_on_resource_reservation) {
+      if (!td_ptr->scheduled_to_resource().empty()) {
+        UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
+      }
     }
     RemoveTaskFromLabelsMap(*td_ptr);
     scheduler_->HandleTaskFailure(td_ptr);
@@ -283,11 +297,12 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       return Status::OK;
     }
     RemoveTaskFromLabelsMap(*td_ptr);
-    // TODO(jagadish): We need to remove below code once we start
-    // getting machine resource stats samples from poseidon i.e., heapster.
-    // Currently updating machine samples statically based on state of pod.
-    if (!td_ptr->scheduled_to_resource().empty()) {
-      UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
+    if (FLAGS_resource_stats_update_based_on_resource_reservation) {
+      if (!(td_ptr->scheduled_to_resource().empty()) &&
+          (td_ptr->state() != TaskDescriptor::COMPLETED) &&
+          (td_ptr->state() != TaskDescriptor::FAILED)) {
+        UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
+      }
     }
     scheduler_->HandleTaskRemoval(td_ptr);
     JobID_t job_id = JobIDFromString(td_ptr->job_id());
@@ -394,8 +409,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     uint64_t* num_tasks_to_remove =
         FindOrNull(job_num_tasks_to_remove_, job_id);
     (*num_tasks_to_remove)++;
-    if ((*num_tasks_to_remove) >= 3800)
-      LOG(INFO) << "All tasks are submitted" << job_id << ", " << 3800;
     reply->set_type(TaskReplyType::TASK_SUBMITTED_OK);
     return Status::OK;
   }
@@ -472,44 +485,35 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     scheduler_->RegisterResource(rtnd_ptr, false, true);
     reply->set_type(NodeReplyType::NODE_ADDED_OK);
 
-    // Add Node initial status simulation
-    ResourceStats resource_stats;
-    ResourceID_t res_id =
-        ResourceIDFromString(rtnd_ptr->resource_desc().uuid());
-    ResourceStatus* rs_ptr = FindPtrOrNull(*resource_map_, res_id);
-    if (rs_ptr == NULL || rs_ptr->mutable_descriptor() == NULL) {
-      reply->set_type(NodeReplyType::NODE_NOT_FOUND);
-      return Status::OK;
+    if (FLAGS_resource_stats_update_based_on_resource_reservation) {
+      // Add Node initial status simulation
+      ResourceStats resource_stats;
+      ResourceID_t res_id =
+          ResourceIDFromString(rtnd_ptr->resource_desc().uuid());
+      ResourceStatus* rs_ptr = FindPtrOrNull(*resource_map_, res_id);
+      if (rs_ptr == NULL || rs_ptr->mutable_descriptor() == NULL) {
+        reply->set_type(NodeReplyType::NODE_NOT_FOUND);
+        return Status::OK;
+      }
+      resource_stats.set_resource_id(rtnd_ptr->resource_desc().uuid());
+      resource_stats.set_timestamp(0);
+
+      CpuStats* cpu_stats = resource_stats.add_cpus_stats();
+      // As some of the resources is utilized by system pods, so initializing
+      // utilization to 10%.
+      cpu_stats->set_cpu_capacity(
+          rtnd_ptr->resource_desc().resource_capacity().cpu_cores());
+      cpu_stats->set_cpu_utilization(0.1);
+      cpu_stats->set_cpu_allocatable(cpu_stats->cpu_capacity() * 0.9);
+      resource_stats.set_mem_capacity(
+          rtnd_ptr->resource_desc().resource_capacity().ram_cap());
+      resource_stats.set_mem_utilization(0.1);
+      resource_stats.set_mem_allocatable(resource_stats.mem_capacity() * 0.9);
+      resource_stats.set_disk_bw(0);
+      resource_stats.set_net_rx_bw(0);
+      resource_stats.set_net_tx_bw(0);
+      knowledge_base_->AddMachineSample(resource_stats);
     }
-    resource_stats.set_resource_id(rtnd_ptr->resource_desc().uuid());
-    resource_stats.set_timestamp(0);
-    CpuStats* cpu_stats = resource_stats.add_cpus_stats();
-    cpu_stats->set_cpu_capacity(
-        rtnd_ptr->resource_desc().resource_capacity().cpu_cores());
-    // Assuming 80% of cpu/mem is is allocatable neglecting 20% for other
-    // processes in node.
-    cpu_stats->set_cpu_allocatable(
-        rtnd_ptr->resource_desc().resource_capacity().cpu_cores() * 0.80);
-    // resource_stats.cpus_stats(0).set_cpu_utilization(0.0);
-    // resource_stats.cpus_stats(0).set_cpu_reservation(0.0);
-    resource_stats.set_mem_allocatable(
-        rtnd_ptr->resource_desc().resource_capacity().ram_cap());
-    resource_stats.set_mem_capacity(
-        rtnd_ptr->resource_desc().resource_capacity().ram_cap() * 0.80);
-    // resource_stats.set_mem_utilization(0.0);
-    // resource_stats.set_mem_reservation(0.0);
-    resource_stats.set_disk_bw(0);
-    resource_stats.set_net_rx_bw(0);
-    resource_stats.set_net_tx_bw(0);
-    // LOG(INFO) << "DEBUG: During node additions: CPU CAP: " <<
-    // cpu_stats->cpu_capacity() << "\n"
-    //          << "                              CPU ALLOC: " <<
-    //          cpu_stats->cpu_allocatable() << "\n"
-    //          << "                              MEM CAP: " <<
-    //          resource_stats.mem_capacity() << "\n"
-    //          << "                              MEM ALLOC: " <<
-    //          resource_stats.mem_allocatable();
-    knowledge_base_->AddMachineSample(resource_stats);
     return Status::OK;
   }
 
@@ -624,7 +628,7 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
   unordered_map<JobID_t, uint64_t, boost::hash<boost::uuids::uuid>>
       job_num_tasks_to_remove_;
   KnowledgeBasePopulator* kb_populator_;
-  //Pod affinity/anti-affinity
+  // Pod affinity/anti-affinity
   unordered_map<string, unordered_map<string, vector<TaskID_t>>> labels_map_;
   vector<TaskID_t> affinity_antiaffinity_tasks_;
 
