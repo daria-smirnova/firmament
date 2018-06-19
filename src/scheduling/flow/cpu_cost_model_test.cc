@@ -163,8 +163,8 @@ TEST_F(CpuCostModelTest, EquivClassToEquivClass) {
   // Calculate cost of arc between main EC and second machine EC.
   ArcDescriptor arc_cost2 = cost_model->EquivClassToEquivClass(
       (*equiv_classes)[0], machine_equiv_classes[1]);
-  EXPECT_EQ(1500, arc_cost1.cost_);
-  EXPECT_EQ(1525, arc_cost2.cost_);
+  EXPECT_EQ(2500, arc_cost1.cost_);
+  EXPECT_EQ(2525, arc_cost2.cost_);
   // Cost of arc between main EC and first machine EC should be less than
   // cost of arc between main EC and second machine EC.
   EXPECT_LT(arc_cost1.cost_, arc_cost2.cost_);
@@ -277,8 +277,10 @@ TEST_F(CpuCostModelTest, GatherStats) {
   machine_test_stats.set_resource_id(to_string(res_id1));
   machine_test_stats.add_cpus_stats();
   CpuStats* pu_test_stats = machine_test_stats.mutable_cpus_stats(0);
-  pu_test_stats->set_cpu_allocatable(500.0);
-  machine_test_stats.set_mem_allocatable(16000);
+  pu_test_stats->set_cpu_utilization(0.5);
+  pu_test_stats->set_cpu_capacity(1000.0);
+  machine_test_stats.set_mem_utilization(0.5);
+  machine_test_stats.set_mem_capacity(32000);
   cost_model->knowledge_base_->AddMachineSample(machine_test_stats);
   // Create flow graph nodes.
   FlowGraphNode* machine_node = new FlowGraphNode(1);

@@ -37,13 +37,16 @@ namespace firmament {
 
 struct CpuMemCostVector_t {
   // record number of dimensions here
-  static const int16_t dimensions_ = 3;
+  static const int16_t dimensions_ = 4;
   uint64_t cpu_mem_cost_;
   uint64_t balanced_res_cost_;
   uint64_t node_affinity_soft_cost_;
   uint64_t pod_affinity_soft_cost_;
   CpuMemCostVector_t()
-      : cpu_mem_cost_(0), balanced_res_cost_(0), node_affinity_soft_cost_(0), pod_affinity_soft_cost_(0) {}
+      : cpu_mem_cost_(0),
+        balanced_res_cost_(0),
+        node_affinity_soft_cost_(0),
+        pod_affinity_soft_cost_(0) {}
 };
 
 struct CpuMemResVector_t {
@@ -167,6 +170,9 @@ class CpuCostModel : public CostModelInterface {
   FRIEND_TEST(CpuCostModelTest, GetOutgoingEquivClassPrefArcs);
   FRIEND_TEST(CpuCostModelTest, GetTaskEquivClasses);
   FRIEND_TEST(CpuCostModelTest, MachineResIDForResource);
+  // Load statistics accumulator helper
+  void AccumulateResourceStats(ResourceDescriptor* accumulator,
+                               ResourceDescriptor* other);
   Cost_t FlattenCostVector(CpuMemCostVector_t cv);
   EquivClass_t GetMachineEC(const string& machine_name, uint64_t ec_index);
   ResourceID_t MachineResIDForResource(ResourceID_t res_id);
