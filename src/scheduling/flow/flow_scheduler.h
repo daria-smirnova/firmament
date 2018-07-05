@@ -127,7 +127,7 @@ class FlowScheduler : public EventDrivenScheduler {
   void RegisterLocalResource(ResourceID_t res_id);
   void RegisterRemoteResource(ResourceID_t res_id);
   uint64_t RunSchedulingIteration(SchedulerStats* scheduler_stats,
-                                  vector<SchedulingDelta>* deltas_output);
+    vector<SchedulingDelta>* deltas_output, vector<JobDescriptor*>* job_vector);
   void UpdateCostModelResourceStats();
 
   // Pointer to the coordinator's topology manager

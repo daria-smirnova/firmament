@@ -454,6 +454,29 @@ void FlowGraphManager::PinTaskToNode(FlowGraphNode* task_node,
   }
 }
 
+multimap<uint64_t, uint64_t>* FlowGraphManager::PopulateTaskMappingsForSimpleSolver(
+                   unordered_map<TaskID_t, ResourceID_t>* task_bindings,
+                   pair<TaskID_t, ResourceID_t> delta) {
+  multimap<uint64_t, uint64_t>* task_mappings = new multimap<uint64_t, uint64_t>();
+  for (auto & item : *task_bindings) {
+    FlowGraphNode* task_node = NodeForTaskID(item.first);
+    FlowGraphNode* res_node = NodeForResourceID(item.second);
+    task_mappings->insert(pair<uint64_t, uint64_t>(task_node->id_, res_node->id_));
+  }
+#ifdef __PLATFORM_HAS_BOOST__
+  if (delta.second.is_nil()) {
+#else
+  if (delta.second == 0) {
+#endif
+    // We did not recieve matching node for this task.
+    return task_mappings;
+  }
+  FlowGraphNode* task_node = NodeForTaskID(delta.first);
+  FlowGraphNode* res_node = NodeForResourceID(delta.second);
+  task_mappings->insert(pair<uint64_t, uint64_t>(task_node->id_, res_node->id_));
+  return task_mappings;
+}
+
 void FlowGraphManager::PurgeUnconnectedEquivClassNodes() {
   // NOTE: we could have a subgraph consisting of equiv class nodes.
   // They would likely not end up being removed in a single

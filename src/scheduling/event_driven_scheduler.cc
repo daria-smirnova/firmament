@@ -655,31 +655,27 @@ void EventDrivenScheduler::LazyGraphReduction(
              current_task->affinity().has_pod_anti_affinity())) {
           if (queue_based_schedule == false || one_task_runnable == true)
             continue;
-          for (auto itr = affinity_antiaffinity_tasks_->begin();
-               itr != affinity_antiaffinity_tasks_->end(); itr++) {
-          }
           for (auto task_itr = affinity_antiaffinity_tasks_->begin();
-               task_itr != affinity_antiaffinity_tasks_->end(); task_itr++) {
+               task_itr != affinity_antiaffinity_tasks_->end();) {
             TaskDescriptor* tdp = FindPtrOrNull(*task_map_, *task_itr);
             if (tdp) {
               if ((tdp->state() == TaskDescriptor::RUNNABLE) &&
                   (one_task_runnable == false)) {
                 TaskID_t task_id = *task_itr;
                 tdp->set_state(TaskDescriptor::CREATED);
-                affinity_antiaffinity_tasks_->erase(task_itr);
+                task_itr = affinity_antiaffinity_tasks_->erase(task_itr);
                 affinity_antiaffinity_tasks_->push_back(task_id);
                 JobID_t tdp_job_id = JobIDFromString(tdp->job_id());
                 runnable_tasks_[tdp_job_id].erase(task_id);
-                task_itr = affinity_antiaffinity_tasks_->begin();
                 continue;
               }
-            }
-            if (tdp->state() == TaskDescriptor::CREATED) {
-              tdp->set_state(TaskDescriptor::RUNNABLE);
-              InsertTaskIntoRunnables(JobIDFromString(tdp->job_id()),
+              if (tdp->state() == TaskDescriptor::CREATED) {
+                tdp->set_state(TaskDescriptor::RUNNABLE);
+                InsertTaskIntoRunnables(JobIDFromString(tdp->job_id()),
                                       tdp->uid());
-              one_task_runnable = true;
-              break;
+                one_task_runnable = true;
+                break;
+              }
             }
           }
         } else {

@@ -86,6 +86,9 @@ class FlowGraphManager {
       unordered_map<TaskID_t, ResourceID_t>* task_bindings,
       vector<SchedulingDelta*>* deltas);
 
+  multimap<uint64_t, uint64_t>* PopulateTaskMappingsForSimpleSolver(
+       unordered_map<TaskID_t, ResourceID_t>* task_bindings,
+       pair<TaskID_t, ResourceID_t> delta);
   /**
    * As a result of task state change, preferences change or
    * resource removal we may end up with unconnected equivalence
@@ -136,6 +139,9 @@ class FlowGraphManager {
   }
   inline FlowGraphNode* sink_node() {
     return sink_node_;
+  }
+  inline CostModelInterface* cost_model() {
+    return cost_model_;
   }
 
  private:

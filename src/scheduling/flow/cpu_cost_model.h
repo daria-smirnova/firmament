@@ -155,6 +155,7 @@ class CpuCostModel : public CostModelInterface {
   FlowGraphNode* GatherStats(FlowGraphNode* accumulator, FlowGraphNode* other);
   void PrepareStats(FlowGraphNode* accumulator);
   FlowGraphNode* UpdateStats(FlowGraphNode* accumulator, FlowGraphNode* other);
+  pair<TaskID_t, ResourceID_t> GetTaskMappingForSingleTask(TaskID_t task_id);
 
  private:
   // Fixed value for OMEGA, the normalization ceiling for each dimension's cost
@@ -214,6 +215,8 @@ class CpuCostModel : public CostModelInterface {
   // Pod affinity/anti-affinity
   unordered_map<string, unordered_map<string, vector<TaskID_t>>>* labels_map_;
   unordered_set<string> namespaces;
+  unordered_map<EquivClass_t, ResourceID_t> ec_to_best_fit_resource_;
+  unordered_map<EquivClass_t, Cost_t> ec_to_min_cost_;
 };
 
 }  // namespace firmament

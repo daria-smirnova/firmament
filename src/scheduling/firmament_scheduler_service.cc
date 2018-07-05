@@ -19,8 +19,8 @@
  */
 
 #include <grpc++/grpc++.h>
-#include <chrono>
 
+#include <ctime>
 #include "base/resource_status.h"
 #include "base/resource_topology_node_desc.pb.h"
 #include "base/units.h"
@@ -59,7 +59,7 @@ DEFINE_string(firmament_scheduler_service_port, "9090",
               "The port of the scheduler service");
 DECLARE_bool(resource_stats_update_based_on_resource_reservation);
 DEFINE_string(service_scheduler, "flow", "Scheduler to use: flow | simple");
-DEFINE_uint64(queue_based_scheduling_time, 1, "Queue Based Schedule run time");
+DEFINE_uint64(queue_based_scheduling_time, 100, "Queue Based Schedule run time");
 
 namespace firmament {
 
@@ -164,17 +164,14 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     SchedulerStats sstat;
     vector<SchedulingDelta> deltas;
     scheduler_->ScheduleAllJobs(&sstat, &deltas);
+    clock_t start = clock();
+    uint64_t elapsed = 0;
     // Schedule tasks having pod affinity/anti-affinity
-    chrono::high_resolution_clock::time_point start =
-        chrono::high_resolution_clock::now();
-    chrono::duration<unsigned int> time_spent(
-        chrono::duration_values<unsigned int>::zero());
     while (affinity_antiaffinity_tasks_.size() &&
-           (time_spent.count() < FLAGS_queue_based_scheduling_time)) {
+           (elapsed < FLAGS_queue_based_scheduling_time)) {
       scheduler_->ScheduleAllQueueJobs(&sstat, &deltas);
-      chrono::high_resolution_clock::time_point end =
-          chrono::high_resolution_clock::now();
-      time_spent = chrono::duration_cast<chrono::seconds>(end - start);
+      clock_t stop = clock();
+      elapsed = (double)(stop - start) * 1000.0 / CLOCKS_PER_SEC;
     }
     // Extract results
     if (deltas.size()) {

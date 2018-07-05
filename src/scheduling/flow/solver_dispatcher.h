@@ -43,6 +43,9 @@ class SolverDispatcher {
   void ExportJSON(string* output) const;
   multimap<uint64_t, uint64_t>* Run(SchedulerStats* scheduler_stats);
 
+  pair<TaskID_t, ResourceID_t> RunSimpleSolverForSingleTask(
+     SchedulerStats* scheduler_stats,
+     TaskID_t single_task_id);
   uint64_t seq_num() const {
     return debug_seq_num_;
   }

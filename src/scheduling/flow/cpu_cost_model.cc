@@ -63,6 +63,24 @@ void CpuCostModel::AccumulateResourceStats(ResourceDescriptor* accumulator,
                                    other->num_slots_below());
 }
 
+pair<TaskID_t, ResourceID_t> CpuCostModel::GetTaskMappingForSingleTask(TaskID_t task_id) {
+  // This function returns best matching resource for given taskid.
+  vector<EquivClass_t>* ecs = GetTaskEquivClasses(task_id);
+  pair<TaskID_t, ResourceID_t> delta;
+  delta.first = task_id;
+  ResourceID_t* res_id = FindOrNull(ec_to_best_fit_resource_, (*ecs)[0]);
+  if (res_id) {
+    delta.second = *res_id;
+  } else {
+#ifdef __PLATFORM_HAS_BOOST__
+    delta.second = boost::uuids::nil_uuid();
+#else
+    delta.second = 0;
+#endif
+  }
+  return delta;
+}
+
 ArcDescriptor CpuCostModel::TaskToUnscheduledAgg(TaskID_t task_id) {
   return ArcDescriptor(2560000, 1ULL, 0ULL);
 }
@@ -166,6 +184,7 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
   CHECK_NOTNULL(td_ptr);
   int64_t node_affinity_normalized_score = 0;
   int64_t pod_affinity_normalized_score = 0;
+  bool pod_affinity_or_anti_affinity_task = false;
   if (td_ptr->has_affinity()) {
     const Affinity& affinity = td_ptr->affinity();
     if (affinity.has_node_affinity()) {
@@ -202,8 +221,10 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
         }
       }
     }
-
     // Expressing pod affinity/anti-affinity priority scores.
+    if (affinity.has_pod_affinity() || affinity.has_pod_anti_affinity()) {
+      pod_affinity_or_anti_affinity_task = true;
+    }
     if ((affinity.has_pod_affinity() &&
          affinity.pod_affinity()
              .preferredduringschedulingignoredduringexecution_size()) ||
@@ -240,11 +261,24 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
       }
     }
   }
-
   cost_vector.node_affinity_soft_cost_ =
       omega_ - node_affinity_normalized_score;
   cost_vector.pod_affinity_soft_cost_ = omega_ - pod_affinity_normalized_score;
   Cost_t final_cost = FlattenCostVector(cost_vector);
+  if (pod_affinity_or_anti_affinity_task) {
+    ResourceID_t current_resource_id =
+      ResourceIDFromString(rs->topology_node().children(0).resource_desc().uuid());
+    ResourceID_t* res_id = FindOrNull(ec_to_best_fit_resource_, ec1);
+    if (!res_id) {
+      ec_to_min_cost_[ec1] = final_cost;
+      ec_to_best_fit_resource_[ec1] = current_resource_id;
+    } else {
+      if (ec_to_min_cost_[ec1] > final_cost) {
+        ec_to_min_cost_[ec1] = final_cost;
+        ec_to_best_fit_resource_[ec1] = current_resource_id;
+      }
+    }
+  }
   return ArcDescriptor(final_cost, 1ULL, 0ULL);
 }
 
@@ -802,12 +836,15 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
       CHECK_NOTNULL(ecs_for_machine);
       uint64_t index = 0;
       CpuMemResVector_t cur_resource;
+      uint64_t task_count = rd.num_running_tasks_below();
+      //TODO(dujun) : FLAGS_max_tasks_per_pu is treated as equivalent to max-pods,
+      // as max-pods functionality is not yet merged at this point.
       for (cur_resource = *task_resource_request;
            cur_resource.cpu_cores_ <= available_resources.cpu_cores_ &&
            cur_resource.ram_cap_ <= available_resources.ram_cap_ &&
-           index < ecs_for_machine->size();
+           index < ecs_for_machine->size() && task_count < FLAGS_max_tasks_per_pu;
            cur_resource.cpu_cores_ += task_resource_request->cpu_cores_,
-          cur_resource.ram_cap_ += task_resource_request->ram_cap_, index++) {
+          cur_resource.ram_cap_ += task_resource_request->ram_cap_, index++, task_count++) {
         pref_ecs->push_back(ec_machines.second[index]);
       }
     }
@@ -930,6 +967,8 @@ void CpuCostModel::PrepareStats(FlowGraphNode* accumulator) {
   accumulator->rd_ptr_->clear_available_resources();
   // Clear maps related to priority scores.
   ec_to_node_priority_scores.clear();
+  ec_to_min_cost_.clear();
+  ec_to_best_fit_resource_.clear();
 }
 
 FlowGraphNode* CpuCostModel::UpdateStats(FlowGraphNode* accumulator,

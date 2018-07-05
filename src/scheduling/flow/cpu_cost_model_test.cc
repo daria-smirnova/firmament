@@ -228,9 +228,9 @@ TEST_F(CpuCostModelTest, GetEquivClassToEquivClassesArcs) {
   cost_model->AddMachine(&rtnd2);
   vector<EquivClass_t>* equiv_to_equiv_arcs =
       cost_model->GetEquivClassToEquivClassesArcs((*equiv_classes)[0]);
-  // Since machine1 & machine2 can fit 16 tasks each, we expect no. of
-  // EquivClassToEquivClassesArcs to be 32.
-  EXPECT_EQ(32U, equiv_to_equiv_arcs->size());
+  // Since machine1 & machine2 can fit 1 tasks each, we expect no. of
+  // EquivClassToEquivClassesArcs to be 2.
+  EXPECT_EQ(2U, equiv_to_equiv_arcs->size());
   // Clean up.
   // Remove test task.
   cost_model->RemoveTask(task_id);

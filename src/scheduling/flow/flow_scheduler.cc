@@ -192,8 +192,7 @@ uint64_t FlowScheduler::ApplySchedulingDeltas(
     const vector<SchedulingDelta*>& deltas) {
   uint64_t num_scheduled = 0;
   // Perform the necessary actions to apply the scheduling changes.
-  //VLOG(2) << "Applying " << deltas.size() << " scheduling deltas...";
-  LOG(INFO) << "Applying " << deltas.size() << " scheduling deltas...";
+  VLOG(2) << "Applying " << deltas.size() << " scheduling deltas...";
   for (auto& delta : deltas) {
     VLOG(2) << "Processing delta of type " << delta->type();
     ResourceID_t res_id = ResourceIDFromString(delta->resource_id());
@@ -477,6 +476,18 @@ uint64_t FlowScheduler::ScheduleAllJobs(SchedulerStats* scheduler_stats,
   //Pod affinity/anti-affinity
   one_task_runnable = false;
   for (auto& job_id_jd : jobs_to_schedule_) {
+    const TaskDescriptor& td = job_id_jd.second->root_task();
+    if (queue_based_schedule) {
+      if (!(td.has_affinity() && (td.affinity().has_pod_affinity() ||
+          td.affinity().has_pod_anti_affinity()))) {
+        continue;
+      }
+    } else {
+      if ((td.has_affinity() && (td.affinity().has_pod_affinity() ||
+        td.affinity().has_pod_anti_affinity()))) {
+        continue;
+      }
+    }
     if (ComputeRunnableTasksForJob(job_id_jd.second).size() > 0) {
       jobs.push_back(job_id_jd.second);
     }
@@ -526,7 +537,7 @@ uint64_t FlowScheduler::ScheduleJobs(const vector<JobDescriptor*>& jd_ptr_vect,
     // depending on these metrics.
     UpdateCostModelResourceStats();
     flow_graph_manager_->AddOrUpdateJobNodes(jds_with_runnables);
-    num_scheduled_tasks += RunSchedulingIteration(scheduler_stats, deltas);
+    num_scheduled_tasks += RunSchedulingIteration(scheduler_stats, deltas, &jds_with_runnables);
     VLOG(1) << "STOP SCHEDULING, placed " << num_scheduled_tasks << " tasks";
     // If we have cost model debug logging turned on, write some debugging
     // information now.
@@ -558,7 +569,7 @@ void FlowScheduler::RegisterResource(ResourceTopologyNodeDescriptor* rtnd_ptr,
 
 uint64_t FlowScheduler::RunSchedulingIteration(
     SchedulerStats* scheduler_stats,
-    vector<SchedulingDelta>* deltas_output) {
+    vector<SchedulingDelta>* deltas_output, vector<JobDescriptor*>* job_vector) {
   // If it's time to revisit time-dependent costs, do so now, just before
   // we run the solver.
   uint64_t cur_time = time_manager_->GetCurrentTimestamp();
@@ -592,8 +603,19 @@ uint64_t FlowScheduler::RunSchedulingIteration(
   tasks_completed_during_solver_run_.clear();
   uint64_t scheduler_start_timestamp = time_manager_->GetCurrentTimestamp();
   // Run the flow solver! This is where all the juicy goodness happens :)
-  multimap<uint64_t, uint64_t>* task_mappings =
-    solver_dispatcher_->Run(scheduler_stats);
+  multimap<uint64_t, uint64_t>* task_mappings;
+  if (!queue_based_schedule) {
+    task_mappings = solver_dispatcher_->Run(scheduler_stats);
+  } else {
+      string id = ((*job_vector)[0])->uuid();
+      TaskID_t single_task_id = *(runnable_tasks_[JobIDFromString(id)].begin());
+      pair<TaskID_t, ResourceID_t> single_delta =
+        solver_dispatcher_->RunSimpleSolverForSingleTask(scheduler_stats,
+                                                         single_task_id);
+      task_mappings =
+        flow_graph_manager_->PopulateTaskMappingsForSimpleSolver(&task_bindings_,
+                                                                 single_delta);
+  }
   solver_run_cnt_++;
   CHECK_LE(scheduler_stats->scheduler_runtime_, FLAGS_max_solver_runtime)
     << "Solver took longer than limit of "
