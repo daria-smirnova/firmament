@@ -42,11 +42,13 @@ struct CpuMemCostVector_t {
   uint64_t balanced_res_cost_;
   uint64_t node_affinity_soft_cost_;
   uint64_t pod_affinity_soft_cost_;
+  uint64_t intolerable_taints_cost_;
   CpuMemCostVector_t()
       : cpu_mem_cost_(0),
         balanced_res_cost_(0),
         node_affinity_soft_cost_(0),
-        pod_affinity_soft_cost_(0) {}
+        pod_affinity_soft_cost_(0),
+	intolerable_taints_cost_(0) {}
 };
 
 struct CpuMemResVector_t {
@@ -63,6 +65,7 @@ struct MinMaxScore_t {
 struct MinMaxScores_t {
   MinMaxScore_t node_affinity_priority;
   MinMaxScore_t pod_affinity_priority;
+  MinMaxScore_t intolerable_taints_priority;
 };
 
 struct PriorityScore_t {
@@ -76,6 +79,7 @@ struct PriorityScore_t {
 struct PriorityScoresList_t {
   PriorityScore_t node_affinity_priority;
   PriorityScore_t pod_affinity_priority;
+  PriorityScore_t intolerable_taints_priority;
 };
 
 class CpuCostModel : public CostModelInterface {
@@ -147,6 +151,10 @@ class CpuCostModel : public CostModelInterface {
   void CalculatePodAffinityAntiAffinityPreference(const ResourceDescriptor& rd,
                                                   const TaskDescriptor& td,
                                                   const EquivClass_t ec);
+  //Intolerable Taints
+  void CalculateIntolerableTaintsCost(const ResourceDescriptor& rd,
+                                                  const TaskDescriptor* td,
+                                                  const EquivClass_t ec);
   vector<EquivClass_t>* GetEquivClassToEquivClassesArcs(EquivClass_t tec);
   void AddMachine(ResourceTopologyNodeDescriptor* rtnd_ptr);
   void AddTask(TaskID_t task_id);
@@ -217,6 +225,8 @@ class CpuCostModel : public CostModelInterface {
   unordered_set<string> namespaces;
   unordered_map<EquivClass_t, ResourceID_t> ec_to_best_fit_resource_;
   unordered_map<EquivClass_t, Cost_t> ec_to_min_cost_;
+  unordered_map<string, string> tolerationSoftEqualMap;
+  unordered_map<string, string> tolerationSoftExistsMap;
 };
 
 }  // namespace firmament

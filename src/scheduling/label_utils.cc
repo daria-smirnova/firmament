@@ -212,5 +212,88 @@ size_t HashSelectors(const RepeatedPtrField<LabelSelector>& selectors) {
   return seed;
 }
 
+bool HasMatchingTolerationforNodeTaints(const ResourceDescriptor& rd,
+                                        const TaskDescriptor& td) {
+  bool IsPodScheduleOnNode = true;
+  bool IsTolerable = false;
+  unordered_map<string, string> tolerationHardEqualMap;
+  unordered_map<string, string> tolerationHardExistsMap;
+  tolerationHardEqualMap.clear();
+  tolerationHardExistsMap.clear();
+  if (rd.taints_size() && (td.tolerations_size() > DEFAULT_TOLERATIONS)) {
+    for (const auto& tolerations : td.tolerations()) {
+      // If it is hard constraint ie "NoSchedule" or "NoExecute", store all the
+      // tolerations
+      // of a given pod in a map
+      // If there is a pod with nil effect, pod is tolerable to any taint on
+      // node
+      if (tolerations.effect() == "NoSchedule" ||
+          tolerations.effect() == "NoExecute" || tolerations.effect() == "") {
+        if (tolerations.operator_() == "Exists") {
+          if (tolerations.key() != "") {
+            if (tolerations.effect() != "") {
+              InsertIfNotPresent(&tolerationHardExistsMap,
+                                 tolerations.key() + tolerations.effect(),
+                                 tolerations.value());
+            } else {
+              InsertIfNotPresent(&tolerationHardExistsMap,
+                                 tolerations.key() + "NoExecute",
+                                 tolerations.value());
+              InsertIfNotPresent(&tolerationHardExistsMap,
+                                 tolerations.key() + "NoSchedule",
+                                 tolerations.value());
+            }
+          } else {
+            IsTolerable = true;
+          }
+        } else if (tolerations.operator_() == "Equal") {
+          if (tolerations.effect() != "") {
+            InsertIfNotPresent(&tolerationHardEqualMap,
+                               tolerations.key() + tolerations.effect(),
+                               tolerations.value());
+          } else {
+            InsertIfNotPresent(&tolerationHardEqualMap,
+                               tolerations.key() + "NoExecute",
+                               tolerations.value());
+            InsertIfNotPresent(&tolerationHardEqualMap,
+                               tolerations.key() + "NoSchedule",
+                               tolerations.value());
+          }
+
+        } else {
+          LOG(FATAL) << "Unsupported operator :" << tolerations.operator_();
+        }
+      }
+    }
+  }
+  if (!IsTolerable) {
+    // Check if all the tolerations in Pod exists for all the taints on Node
+    for (const auto& taint : rd.taints()) {
+      if (taint.effect() == "NoSchedule" || taint.effect() == "NoExecute") {
+        if (td.tolerations_size() == DEFAULT_TOLERATIONS) {
+          // If the number of taints is more than 0 and there are no
+          // tolerations, pods cannot be scheduled
+          return !IsPodScheduleOnNode;
+        }
+        if (!ContainsKey(tolerationHardExistsMap,
+                         taint.key() + taint.effect())) {
+          const string* value = FindOrNull(tolerationHardEqualMap,
+                                           (taint.key() + taint.effect()));
+
+          if (value != NULL) {
+            if (*value != taint.value()) {
+              return !IsPodScheduleOnNode;
+            }
+
+          } else {
+            return !IsPodScheduleOnNode;
+          }
+        }
+      }
+    }
+  }
+  return IsPodScheduleOnNode;
+}
+
 }  // namespace scheduler
 }  // namespace firmament

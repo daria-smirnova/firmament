@@ -379,7 +379,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     AddTaskToLabelsMap(task_desc_ptr->task_descriptor());
     JobID_t job_id = JobIDFromString(task_desc_ptr->task_descriptor().job_id());
     JobDescriptor* jd_ptr = FindOrNull(*job_map_, job_id);
-    // LOG(INFO) << "Job id is " << job_id ;
     if (jd_ptr == NULL) {
       CHECK(InsertIfNotPresent(job_map_.get(), job_id,
                                task_desc_ptr->job_descriptor()));
@@ -554,6 +553,10 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
         rs_ptr->mutable_topology_node(), *updated_rtnd_ptr,
         boost::bind(&FirmamentSchedulerServiceImpl::UpdateNodeLabels, this, _1,
                     _2));
+		DFSTraverseResourceProtobufTreesReturnRTNDs(
+		rs_ptr->mutable_topology_node(), *updated_rtnd_ptr,
+		boost::bind(&FirmamentSchedulerServiceImpl::UpdateNodeTaints, this, _1,
+                    _2));
     // TODO(ionel): Support other types of node updates.
     reply->set_type(NodeReplyType::NODE_UPDATED_OK);
     return Status::OK;
@@ -569,6 +572,17 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       label_ptr->CopyFrom(label);
     }
   }
+  
+  void UpdateNodeTaints(ResourceTopologyNodeDescriptor* old_rtnd_ptr,
+                        const ResourceTopologyNodeDescriptor& new_rtnd_ptr) {
+	ResourceDescriptor* old_rd_ptr = old_rtnd_ptr->mutable_resource_desc();
+    const ResourceDescriptor& new_rd = new_rtnd_ptr.resource_desc();	
+	old_rd_ptr->clear_taints();
+	for (const auto& taint : new_rd.taints()) {
+		Taint* taint_ptr = old_rd_ptr->add_taints();
+		taint_ptr->CopyFrom(taint);
+    	}
+	}
 
   Status AddTaskStats(ServerContext* context, const TaskStats* task_stats,
                       TaskStatsResponse* reply) override {

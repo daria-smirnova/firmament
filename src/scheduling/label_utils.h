@@ -31,6 +31,8 @@
 #include "base/resource_desc.pb.h"
 #include "base/task_desc.pb.h"
 
+#define DEFAULT_TOLERATIONS 2
+
 namespace firmament {
 namespace scheduler {
 RepeatedPtrField<LabelSelector> NodeSelectorRequirementsAsLabelSelectors(
@@ -53,6 +55,7 @@ bool SatisfiesLabelSelector(const unordered_map<string, string>& rd_labels,
                             const unordered_set<string>& selector_values,
                             const LabelSelector& selector);
 size_t HashSelectors(const RepeatedPtrField<LabelSelector>& selectors);
+bool HasMatchingTolerationforNodeTaints(const ResourceDescriptor& rd, const TaskDescriptor& td);
 }  // namespace scheduler
 }  // namespace firmament
 

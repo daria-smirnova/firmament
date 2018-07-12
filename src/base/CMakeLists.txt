@@ -15,10 +15,12 @@ set(BASE_PROTOBUFS
   base/pod_affinity.proto
   base/pod_anti_affinity.proto
   base/reference_desc.proto
+  base/taints.proto
   base/resource_desc.proto
   base/resource_stats.proto
   base/resource_topology_node_desc.proto
   base/resource_vector.proto
+  base/tolerations.proto
   base/task_desc.proto
   base/task_final_report.proto
   base/task_stats.proto

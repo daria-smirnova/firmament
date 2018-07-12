@@ -13,6 +13,7 @@ import "base/reference_desc.proto";
 import "base/resource_vector.proto";
 import "base/task_final_report.proto";
 import "base/affinity.proto";
+import "base/tolerations.proto";
 
 message TaskDescriptor {
   enum TaskState {
@@ -91,4 +92,6 @@ message TaskDescriptor {
   Affinity affinity = 34;
   // Namespace
   string task_namespace = 35;
+  // Tolerations
+  repeated Toleration tolerations = 36;
 }
