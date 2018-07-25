@@ -162,6 +162,16 @@ class CostModelInterface {
   virtual vector<ResourceID_t>* GetTaskPreferenceArcs(TaskID_t task_id) = 0;
 
   /**
+   * Updates resource to task symmetry map.
+   */
+  virtual void UpdateResourceToTaskSymmetryMap(ResourceID_t res_id, TaskID_t td) {}
+
+  /**
+   * Removes task from resource to task symmetry map.
+   */
+  virtual void RemoveTaskFromTaskSymmetryMap(TaskDescriptor* td_ptr) {}
+
+  /**
    * Get equivalence classes to which the outgoing arcs of an equivalence class
    * are pointing to.
    * @return a vectors of equivalence classes to which we have an outgoing arc.

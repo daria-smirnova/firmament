@@ -72,6 +72,7 @@ DECLARE_string(flow_scheduling_solver);
 DECLARE_bool(flowlessly_flip_algorithms);
 DEFINE_bool(resource_stats_update_based_on_resource_reservation, true,
             "Set this false when you have external machine stats server");
+DEFINE_bool(pod_affinity_antiaffinity_symmetry, false, "Enable pod affinity/anti-affinity symmetry");
 
 namespace firmament {
 namespace scheduler {
@@ -332,6 +333,10 @@ void FlowScheduler::HandleTaskCompletion(TaskDescriptor* td_ptr,
     // removed from the flow network.
     task_in_graph = false;
   }
+  // pod affinity/anti-affinity symmetry
+  if (FLAGS_pod_affinity_antiaffinity_symmetry) {
+    cost_model_->RemoveTaskFromTaskSymmetryMap(td_ptr);
+  }
   // We first call into the superclass handler because it populates
   // the task report. The report might be used by the cost models.
   EventDrivenScheduler::HandleTaskCompletion(td_ptr, report);
@@ -355,6 +360,10 @@ void FlowScheduler::HandleTaskEviction(TaskDescriptor* td_ptr,
 void FlowScheduler::HandleTaskFailure(TaskDescriptor* td_ptr) {
   boost::lock_guard<boost::recursive_mutex> lock(scheduling_lock_);
   flow_graph_manager_->TaskFailed(td_ptr->uid());
+  // pod affinity/anti-affinity symmetry
+  if (FLAGS_pod_affinity_antiaffinity_symmetry) {
+    cost_model_->RemoveTaskFromTaskSymmetryMap(td_ptr);
+  }
   EventDrivenScheduler::HandleTaskFailure(td_ptr);
 }
 
@@ -409,6 +418,10 @@ void FlowScheduler::HandleTaskPlacement(TaskDescriptor* td_ptr,
     if (it != affinity_antiaffinity_tasks_->end()) {
       affinity_antiaffinity_tasks_->erase(it);
     }
+    // pod affinity/anti-affinity symmetry
+    if (FLAGS_pod_affinity_antiaffinity_symmetry) {
+      cost_model_->UpdateResourceToTaskSymmetryMap(ResourceIDFromString(rd_ptr->uuid()), td_ptr->uid());
+    }
   }
   EventDrivenScheduler::HandleTaskPlacement(td_ptr, rd_ptr);
 }
@@ -416,6 +429,10 @@ void FlowScheduler::HandleTaskPlacement(TaskDescriptor* td_ptr,
 void FlowScheduler::HandleTaskRemoval(TaskDescriptor* td_ptr) {
   boost::lock_guard<boost::recursive_mutex> lock(scheduling_lock_);
   flow_graph_manager_->TaskRemoved(td_ptr->uid());
+  // pod affinity/anti-affinity symmetry
+  if (FLAGS_pod_affinity_antiaffinity_symmetry) {
+    cost_model_->RemoveTaskFromTaskSymmetryMap(td_ptr);
+  }
   EventDrivenScheduler::HandleTaskRemoval(td_ptr);
 }
 

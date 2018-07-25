@@ -33,6 +33,7 @@
 DEFINE_uint64(max_multi_arcs_for_cpu, 50, "Maximum number of multi-arcs.");
 
 DECLARE_uint64(max_tasks_per_pu);
+DECLARE_bool(pod_affinity_antiaffinity_symmetry);
 
 namespace firmament {
 
@@ -327,6 +328,15 @@ Cost_t CpuCostModel::FlattenCostVector(CpuMemCostVector_t cv) {
   return accumulator;
 }
 
+bool CpuCostModel::CheckPodAntiAffinitySymmetryConflict(TaskDescriptor* td_ptr) {
+  for (auto itr = resource_to_task_symmetry_map_.begin(); itr != resource_to_task_symmetry_map_.end(); itr++) {
+    if (!SatisfiesPodAntiAffinitySymmetry(itr->first, *td_ptr))
+      return true;
+  }
+  return false;
+}
+
+
 vector<EquivClass_t>* CpuCostModel::GetTaskEquivClasses(TaskID_t task_id) {
   // Get the equivalence class for the resource request: cpu and memory
   vector<EquivClass_t>* ecs = new vector<EquivClass_t>();
@@ -336,6 +346,7 @@ vector<EquivClass_t>* CpuCostModel::GetTaskEquivClasses(TaskID_t task_id) {
       FindOrNull(task_resource_requirement_, task_id);
   CHECK_NOTNULL(task_resource_request);
   size_t task_agg = 0;
+  bool pod_antiaffinity_symmetry = false;
   if (td_ptr->has_affinity() || td_ptr->tolerations_size()) {
     // For tasks which has affinity requirements, we hash the job id.
     // TODO(jagadish): This hash has to be handled in an efficient way in
@@ -348,16 +359,24 @@ vector<EquivClass_t>* CpuCostModel::GetTaskEquivClasses(TaskID_t task_id) {
         task_agg, to_string(task_resource_request->cpu_cores_) + "cpumem" +
                       to_string(task_resource_request->ram_cap_));
   } else {
-    // For other tasks, only hash the cpu and mem requests.
-    boost::hash_combine(
-        task_agg, to_string(task_resource_request->cpu_cores_) + "cpumem" +
-                      to_string(task_resource_request->ram_cap_));
+    if (FLAGS_pod_affinity_antiaffinity_symmetry && td_ptr->labels_size() && CheckPodAntiAffinitySymmetryConflict(td_ptr)) {
+      pod_antiaffinity_symmetry = true;
+      task_agg = HashJobID(*td_ptr);
+    } else {
+      // For other tasks, only hash the cpu and mem requests.
+      boost::hash_combine(
+          task_agg, to_string(task_resource_request->cpu_cores_) + "cpumem" +
+                        to_string(task_resource_request->ram_cap_));
+    }
   }
   EquivClass_t resource_request_ec = static_cast<EquivClass_t>(task_agg);
   ecs->push_back(resource_request_ec);
   InsertIfNotPresent(&ec_resource_requirement_, resource_request_ec,
                      *task_resource_request);
   InsertIfNotPresent(&ec_to_td_requirements, resource_request_ec, *td_ptr);
+  if (pod_antiaffinity_symmetry) {
+    ecs_with_pod_antiaffinity_symmetry_.insert(resource_request_ec);
+  }
   return ecs;
 }
 
@@ -785,6 +804,7 @@ bool CpuCostModel::SatisfiesPodAntiAffinityTerm(
         return false;
     }
   }
+   namespaces.clear();
   return true;
 }
 
@@ -805,6 +825,7 @@ bool CpuCostModel::SatisfiesPodAffinityTerm(const ResourceDescriptor& rd,
         return false;
     }
   }
+  namespaces.clear();
   return true;
 }
 
@@ -947,6 +968,139 @@ void CpuCostModel::CalculatePodAffinityAntiAffinityPreference(
   }
 }
 
+// Pod affinity/anti-affinity symmetry.
+void CpuCostModel::UpdateResourceToTaskSymmetryMap(ResourceID_t res_id, TaskID_t task_id) {
+  ResourceID_t machine_res_id = MachineResIDForResource(res_id);
+  vector<TaskID_t>* tasks = FindOrNull(resource_to_task_symmetry_map_, machine_res_id);
+  if (tasks) {
+    tasks->push_back(task_id);
+  } else {
+    vector<TaskID_t> task_vec;
+    task_vec.push_back(task_id);
+    InsertIfNotPresent(&resource_to_task_symmetry_map_, machine_res_id, task_vec);
+  }
+}
+
+void CpuCostModel::RemoveTaskFromTaskSymmetryMap(TaskDescriptor* td_ptr) {
+  ResourceID_t res_id = ResourceIDFromString(td_ptr->scheduled_to_resource());
+  ResourceID_t machine_res_id = MachineResIDForResource(res_id);
+  vector<TaskID_t>* tasks = FindOrNull(resource_to_task_symmetry_map_, machine_res_id);
+  if (tasks) {
+    auto it = find(tasks->begin(), tasks->end(), td_ptr->uid());
+    if (it != tasks->end()) {
+      tasks->erase(it);
+    }
+    if (!tasks->size()) {
+      resource_to_task_symmetry_map_.erase(machine_res_id);
+    }
+  }
+}
+
+bool CpuCostModel::SatisfiesSymmetryMatchExpression(unordered_multimap<string, string> task_labels, LabelSelectorRequirement expression_selector) {
+  auto range_it = task_labels.equal_range(expression_selector.key());
+  if (expression_selector.operator_() == std::string("In")) {
+    for (auto it = range_it.first; it != range_it.second; it++) {
+      for (auto value : expression_selector.values()) {
+        if (it->second == value) {
+          return true;
+        }
+      }
+    }
+    return false;
+  } else if (expression_selector.operator_() == std::string("NotIn")) {
+    for (auto it = range_it.first; it != range_it.second; it++) {
+      for (auto value : expression_selector.values()) {
+        if (it->second == value) {
+          return false;
+        }
+      }
+    }
+    return true;
+  } else if (expression_selector.operator_() == std::string("Exists")) {
+    return (range_it.first != range_it.second);
+  } else if (expression_selector.operator_() == std::string("DoesNotExist")) {
+    return !(range_it.first != range_it.second);
+  } else {
+    LOG(FATAL) << "Unsupported selector type: " << expression_selector.operator_();
+  }
+  return false;
+}
+
+bool CpuCostModel::SatisfiesPodAntiAffinitySymmetryMatchExpressions(unordered_multimap<string, string> task_labels, const RepeatedPtrField<LabelSelectorRequirementAntiAff>& matchexpressions) {
+  for (auto& expression : matchexpressions) {
+    LabelSelectorRequirement expression_selector;
+    expression_selector.set_key(expression.key());
+    expression_selector.set_operator_(expression.operator_());
+    for (auto& value : expression.values()) {
+      expression_selector.add_values(value);
+    }
+    if (!SatisfiesSymmetryMatchExpression(task_labels, expression_selector)) {
+      continue;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CpuCostModel::SatisfiesPodAntiAffinitySymmetryTerm(const TaskDescriptor& td, const TaskDescriptor& target_td, unordered_multimap<string, string> task_labels, const PodAffinityTermAntiAff term) {
+  if (!term.namespaces_size()) {
+    namespaces.insert(target_td.task_namespace());
+  } else {
+    for (auto name : term.namespaces()) {
+      namespaces.insert(name);
+    }
+  }
+  if (HasNamespace(td.task_namespace())) {
+    return false;
+  }
+  if (term.has_labelselector()) {
+    if (term.labelselector().matchexpressions_size()) {
+      if (!SatisfiesPodAntiAffinitySymmetryMatchExpressions(
+              task_labels, term.labelselector().matchexpressions())) {
+        return false;
+      }
+    }
+  }
+  namespaces.clear();
+  return true;
+}
+
+bool CpuCostModel::SatisfiesPodAntiAffinityTermsSymmetry(const TaskDescriptor& td, const TaskDescriptor& target_td, unordered_multimap<string, string> task_labels, const RepeatedPtrField<PodAffinityTermAntiAff>& podantiaffinityterms) {
+  for (auto& term : podantiaffinityterms) {
+    if (!SatisfiesPodAntiAffinitySymmetryTerm(td, target_td, task_labels, term)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Hard constraint check for pod anti-affinity symmetry.
+bool CpuCostModel::SatisfiesPodAntiAffinitySymmetry(ResourceID_t res_id, const TaskDescriptor& td) {
+  unordered_multimap<string, string> task_labels;
+  for (const auto& label : td.labels()) {
+    task_labels.insert(pair<string, string>(label.key(), label.value()));
+  }
+  vector<TaskID_t>* tasks = FindOrNull(resource_to_task_symmetry_map_, res_id);
+  if (tasks) {
+    for (auto task_id : *tasks) {
+      TaskDescriptor* target_td_ptr = FindPtrOrNull(*task_map_, task_id);
+      if (target_td_ptr) {
+        if (target_td_ptr->has_affinity()) {
+          Affinity affinity = target_td_ptr->affinity();
+          if (affinity.has_pod_anti_affinity() && affinity.pod_anti_affinity().requiredduringschedulingignoredduringexecution_size()) {
+            if (!SatisfiesPodAntiAffinityTermsSymmetry(td, *target_td_ptr, task_labels, affinity.pod_anti_affinity().requiredduringschedulingignoredduringexecution())) {
+              return false;
+            }
+          }
+        }
+      }
+    }
+  }
+  return true;
+}
+
+
 vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
     EquivClass_t ec) {
   vector<EquivClass_t>* pref_ecs = new vector<EquivClass_t>();
@@ -987,6 +1141,16 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
         }
 		// Checking costs for intolerable taints
 		
+        // Checking pod anti-affinity symmetry
+        if (FLAGS_pod_affinity_antiaffinity_symmetry && (ecs_with_pod_antiaffinity_symmetry_.find(ec) != ecs_with_pod_antiaffinity_symmetry_.end())) {
+          if (td_ptr->labels_size()) {
+            if (SatisfiesPodAntiAffinitySymmetry(ResourceIDFromString(rd.uuid()), *td_ptr)) {
+              //Calculate soft constriants score if needed.
+            } else {
+              continue;
+            }
+          }
+        }
       }
       CpuMemResVector_t available_resources;
       available_resources.cpu_cores_ =
