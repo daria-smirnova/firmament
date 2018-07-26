@@ -172,6 +172,11 @@ class CostModelInterface {
   virtual void RemoveTaskFromTaskSymmetryMap(TaskDescriptor* td_ptr) {}
 
   /**
+   * Removes EC from EC to pod symmetry map.
+   */
+  virtual void RemoveECFromPodSymmetryMap(EquivClass_t ec) {}
+
+  /**
    * Get equivalence classes to which the outgoing arcs of an equivalence class
    * are pointing to.
    * @return a vectors of equivalence classes to which we have an outgoing arc.

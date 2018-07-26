@@ -184,9 +184,6 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
   const TaskDescriptor* td_ptr = FindOrNull(ec_to_td_requirements, ec1);
   CHECK_NOTNULL(td_ptr);
   int64_t node_affinity_normalized_score = 0;
-  int64_t pod_affinity_normalized_score = 0;
- // int64_t taints_normalized_score = 0;
-  bool pod_affinity_or_anti_affinity_task = false;
   if (td_ptr->has_affinity()) {
     const Affinity& affinity = td_ptr->affinity();
     if (affinity.has_node_affinity()) {
@@ -223,44 +220,51 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
         }
       }
     }
-    // Expressing pod affinity/anti-affinity priority scores.
-    if (affinity.has_pod_affinity() || affinity.has_pod_anti_affinity()) {
-      pod_affinity_or_anti_affinity_task = true;
-    }
-    if ((affinity.has_pod_affinity() &&
-         affinity.pod_affinity()
+  }
+
+  // Expressing pod affinity/anti-affinity priority scores.
+  int64_t pod_affinity_normalized_score = 0;
+  bool pod_affinity_or_anti_affinity_task = false;
+  if (td_ptr->has_affinity() && (td_ptr->affinity().has_pod_affinity() ||
+                                 td_ptr->affinity().has_pod_anti_affinity())) {
+    pod_affinity_or_anti_affinity_task = true;
+  }
+  if ((td_ptr->has_affinity() &&
+       ((td_ptr->affinity().has_pod_affinity() &&
+         td_ptr->affinity()
+             .pod_affinity()
              .preferredduringschedulingignoredduringexecution_size()) ||
-        (affinity.has_pod_anti_affinity() &&
-         affinity.pod_anti_affinity()
-             .preferredduringschedulingignoredduringexecution_size())) {
-      unordered_map<ResourceID_t, PriorityScoresList_t,
-                    boost::hash<boost::uuids::uuid>>*
-          nodes_priority_scores_ptr =
-              FindOrNull(ec_to_node_priority_scores, ec1);
-      CHECK_NOTNULL(nodes_priority_scores_ptr);
-      PriorityScoresList_t* priority_scores_struct_ptr =
-          FindOrNull(*nodes_priority_scores_ptr, *machine_res_id);
-      CHECK_NOTNULL(priority_scores_struct_ptr);
-      PriorityScore_t& pod_affinity_score =
-          priority_scores_struct_ptr->pod_affinity_priority;
-      MinMaxScores_t* max_min_priority_scores =
-          FindOrNull(ec_to_max_min_priority_scores, ec1);
-      CHECK_NOTNULL(max_min_priority_scores);
-      if (pod_affinity_score.final_score == -1) {
-        int64_t max_score =
-            max_min_priority_scores->pod_affinity_priority.max_score;
-        int64_t min_score =
-            max_min_priority_scores->pod_affinity_priority.min_score;
-        if ((max_score - min_score) > 0) {
-          pod_affinity_normalized_score =
-              ((pod_affinity_score.score - min_score) /
-               (max_score - min_score)) *
-              omega_;
-        }
-        pod_affinity_score.final_score = pod_affinity_normalized_score;
-      } else {
-        pod_affinity_normalized_score = pod_affinity_score.final_score;
+        (td_ptr->affinity().has_pod_anti_affinity() &&
+         td_ptr->affinity()
+             .pod_anti_affinity()
+             .preferredduringschedulingignoredduringexecution_size()))) ||
+      (ecs_with_pod_antiaffinity_symmetry_.find(ec1) !=
+       ecs_with_pod_antiaffinity_symmetry_.end())) {
+    unordered_map<ResourceID_t, PriorityScoresList_t,
+                  boost::hash<boost::uuids::uuid>>* nodes_priority_scores_ptr =
+        FindOrNull(ec_to_node_priority_scores, ec1);
+    CHECK_NOTNULL(nodes_priority_scores_ptr);
+    PriorityScoresList_t* priority_scores_struct_ptr =
+        FindOrNull(*nodes_priority_scores_ptr, *machine_res_id);
+    CHECK_NOTNULL(priority_scores_struct_ptr);
+    PriorityScore_t& pod_affinity_score =
+        priority_scores_struct_ptr->pod_affinity_priority;
+    MinMaxScores_t* max_min_priority_scores =
+        FindOrNull(ec_to_max_min_priority_scores, ec1);
+    CHECK_NOTNULL(max_min_priority_scores);
+    if (pod_affinity_score.final_score == -1) {
+      int64_t max_score =
+          max_min_priority_scores->pod_affinity_priority.max_score;
+      int64_t min_score =
+          max_min_priority_scores->pod_affinity_priority.min_score;
+      if ((max_score - min_score) > 0) {
+        pod_affinity_normalized_score =
+            ((pod_affinity_score.score - min_score) / (max_score - min_score)) *
+            omega_;
       }
+      pod_affinity_score.final_score = pod_affinity_normalized_score;
+    } else {
+      pod_affinity_normalized_score = pod_affinity_score.final_score;
     }
   }
   //Expressing taints/tolerations priority scores
@@ -328,14 +332,78 @@ Cost_t CpuCostModel::FlattenCostVector(CpuMemCostVector_t cv) {
   return accumulator;
 }
 
-bool CpuCostModel::CheckPodAntiAffinitySymmetryConflict(TaskDescriptor* td_ptr) {
-  for (auto itr = resource_to_task_symmetry_map_.begin(); itr != resource_to_task_symmetry_map_.end(); itr++) {
-    if (!SatisfiesPodAntiAffinitySymmetry(itr->first, *td_ptr))
-      return true;
+bool CpuCostModel::CheckPodAffinityAntiAffinitySymmetryConflict(
+    TaskDescriptor* td_ptr) {
+  for (auto itr = resource_to_task_symmetry_map_.begin();
+       itr != resource_to_task_symmetry_map_.end(); itr++) {
+    if (!SatisfiesPodAntiAffinitySymmetry(itr->first, *td_ptr)) return true;
+    // Pod affinity/anti-affinity soft conflict check.
+    vector<TaskID_t>* tasks =
+        FindOrNull(resource_to_task_symmetry_map_, itr->first);
+    if (tasks) {
+      unordered_multimap<string, string> task_labels;
+      for (const auto& label : td_ptr->labels()) {
+        task_labels.insert(pair<string, string>(label.key(), label.value()));
+      }
+      for (auto task_id : *tasks) {
+        TaskDescriptor* target_td_ptr = FindPtrOrNull(*task_map_, task_id);
+        if (target_td_ptr) {
+          if (target_td_ptr->has_affinity()) {
+            Affinity affinity = target_td_ptr->affinity();
+            if (affinity.has_pod_affinity()) {
+              // Target pod affinity hard constraint preference conflict check.
+              if (affinity.pod_affinity()
+                      .requiredduringschedulingignoredduringexecution_size()) {
+                for (auto& affinityterm :
+                     affinity.pod_affinity()
+                         .requiredduringschedulingignoredduringexecution()) {
+                  if (SatisfiesPodAffinitySymmetryTerm(
+                          *td_ptr, *target_td_ptr, task_labels, affinityterm)) {
+                    return true;
+                  }
+                }
+              }
+              // Target pod affinity soft constraint conflict check.
+              if (affinity.pod_affinity()
+                      .preferredduringschedulingignoredduringexecution_size()) {
+                for (auto& weightedaffinityterm :
+                     affinity.pod_affinity()
+                         .preferredduringschedulingignoredduringexecution()) {
+                  if (!weightedaffinityterm.weight()) continue;
+                  if (weightedaffinityterm.has_podaffinityterm()) {
+                    if (SatisfiesPodAffinitySymmetryTerm(
+                            *td_ptr, *target_td_ptr, task_labels,
+                            weightedaffinityterm.podaffinityterm())) {
+                      return true;
+                    }
+                  }
+                }
+              }
+            }
+            // Target pod anti-affinity soft constraint conflict check.
+            if (affinity.has_pod_anti_affinity() &&
+                affinity.pod_anti_affinity()
+                    .preferredduringschedulingignoredduringexecution_size()) {
+              for (auto& weightedantiaffinityterm :
+                   affinity.pod_anti_affinity()
+                       .preferredduringschedulingignoredduringexecution()) {
+                if (!weightedantiaffinityterm.weight()) continue;
+                if (weightedantiaffinityterm.has_podaffinityterm()) {
+                  if (!SatisfiesPodAntiAffinitySymmetryTerm(
+                          *td_ptr, *target_td_ptr, task_labels,
+                          weightedantiaffinityterm.podaffinityterm())) {
+                    return true;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   }
   return false;
 }
-
 
 vector<EquivClass_t>* CpuCostModel::GetTaskEquivClasses(TaskID_t task_id) {
   // Get the equivalence class for the resource request: cpu and memory
@@ -359,7 +427,8 @@ vector<EquivClass_t>* CpuCostModel::GetTaskEquivClasses(TaskID_t task_id) {
         task_agg, to_string(task_resource_request->cpu_cores_) + "cpumem" +
                       to_string(task_resource_request->ram_cap_));
   } else {
-    if (FLAGS_pod_affinity_antiaffinity_symmetry && td_ptr->labels_size() && CheckPodAntiAffinitySymmetryConflict(td_ptr)) {
+    if (FLAGS_pod_affinity_antiaffinity_symmetry && td_ptr->labels_size() &&
+        CheckPodAffinityAntiAffinitySymmetryConflict(td_ptr)) {
       pod_antiaffinity_symmetry = true;
       task_agg = HashJobID(*td_ptr);
     } else {
@@ -849,7 +918,20 @@ bool CpuCostModel::SatisfiesPodAffinityTerms(
 
 // Hard constraint check for pod affinity/anti-affinity.
 bool CpuCostModel::SatisfiesPodAffinityAntiAffinityRequired(
-    const ResourceDescriptor& rd, const TaskDescriptor& td) {
+    const ResourceDescriptor& rd, const TaskDescriptor& td,
+    const EquivClass_t ec) {
+  // Check for pod anti-affinity symmetry.
+  if (FLAGS_pod_affinity_antiaffinity_symmetry &&
+      (ecs_with_pod_antiaffinity_symmetry_.find(ec) !=
+       ecs_with_pod_antiaffinity_symmetry_.end())) {
+    if (td.labels_size()) {
+      if (!SatisfiesPodAntiAffinitySymmetry(ResourceIDFromString(rd.uuid()),
+                                            td)) {
+        return false;
+      }
+    }
+  }
+
   if (td.has_affinity()) {
     Affinity affinity = td.affinity();
     if (affinity.has_pod_anti_affinity()) {
@@ -878,13 +960,105 @@ bool CpuCostModel::SatisfiesPodAffinityAntiAffinityRequired(
   return true;
 }
 
+int64_t CpuCostModel::CalculatePodAffinitySymmetryPreference(
+    Affinity affinity, const TaskDescriptor& td,
+    const TaskDescriptor& target_td,
+    unordered_multimap<string, string> task_labels) {
+  int64_t sum_of_weights = 0;
+  if (affinity.has_pod_affinity()) {
+    // Target pod affinity hard constraint score.
+    if (affinity.pod_affinity()
+            .requiredduringschedulingignoredduringexecution_size()) {
+      for (auto& affinityterm :
+           affinity.pod_affinity()
+               .requiredduringschedulingignoredduringexecution()) {
+        if (SatisfiesPodAffinitySymmetryTerm(td, target_td, task_labels,
+                                             affinityterm)) {
+          sum_of_weights += 100;
+        }
+      }
+    }
+    // Target pod affinity soft constraint score.
+    if (affinity.pod_affinity()
+            .preferredduringschedulingignoredduringexecution_size()) {
+      for (auto& weightedaffinityterm :
+           affinity.pod_affinity()
+               .preferredduringschedulingignoredduringexecution()) {
+        if (!weightedaffinityterm.weight()) continue;
+        if (weightedaffinityterm.has_podaffinityterm()) {
+          if (SatisfiesPodAffinitySymmetryTerm(
+                  td, target_td, task_labels,
+                  weightedaffinityterm.podaffinityterm())) {
+            sum_of_weights += weightedaffinityterm.weight();
+          }
+        }
+      }
+    }
+  }
+  return sum_of_weights;
+}
+
+int64_t CpuCostModel::CalculatePodAntiAffinitySymmetryPreference(
+    Affinity affinity, const TaskDescriptor& td,
+    const TaskDescriptor& target_td,
+    unordered_multimap<string, string> task_labels) {
+  int64_t sum_of_weights = 0;
+  // Target pod anti-affinity soft constraint score.
+  if (affinity.has_pod_anti_affinity() &&
+      affinity.pod_anti_affinity()
+          .preferredduringschedulingignoredduringexecution_size()) {
+    for (auto& weightedantiaffinityterm :
+         affinity.pod_anti_affinity()
+             .preferredduringschedulingignoredduringexecution()) {
+      if (!weightedantiaffinityterm.weight()) continue;
+      if (weightedantiaffinityterm.has_podaffinityterm()) {
+        if (!SatisfiesPodAntiAffinitySymmetryTerm(
+                td, target_td, task_labels,
+                weightedantiaffinityterm.podaffinityterm())) {
+          sum_of_weights += weightedantiaffinityterm.weight();
+        }
+      }
+    }
+  }
+  return sum_of_weights;
+}
+
+
 // Soft constraint check for pod affinity/anti-affinity.
 void CpuCostModel::CalculatePodAffinityAntiAffinityPreference(
     const ResourceDescriptor& rd, const TaskDescriptor& td,
     const EquivClass_t ec) {
+  int64_t sum_of_weights = 0;
+  // Pod affinity/anti-affinity symmetry.
+  if (FLAGS_pod_affinity_antiaffinity_symmetry &&
+      (ecs_with_pod_antiaffinity_symmetry_.find(ec) !=
+       ecs_with_pod_antiaffinity_symmetry_.end())) {
+    if (td.labels_size()) {
+      unordered_multimap<string, string> task_labels;
+      for (const auto& label : td.labels()) {
+        task_labels.insert(pair<string, string>(label.key(), label.value()));
+      }
+      vector<TaskID_t>* tasks = FindOrNull(resource_to_task_symmetry_map_,
+                                           ResourceIDFromString(rd.uuid()));
+      if (tasks) {
+        for (auto task_id : *tasks) {
+          TaskDescriptor* target_td_ptr = FindPtrOrNull(*task_map_, task_id);
+          if (target_td_ptr) {
+            if (target_td_ptr->has_affinity()) {
+              Affinity affinity = target_td_ptr->affinity();
+              sum_of_weights += CalculatePodAffinitySymmetryPreference(
+                  affinity, td, *target_td_ptr, task_labels);
+              sum_of_weights -= CalculatePodAntiAffinitySymmetryPreference(
+                  affinity, td, *target_td_ptr, task_labels);
+            }
+          }
+        }
+      }
+    }
+  }
+
   if (td.has_affinity()) {
     Affinity affinity = td.affinity();
-    int32_t sum_of_weights = 0;
     if (affinity.has_pod_anti_affinity()) {
       if (affinity.pod_anti_affinity()
               .preferredduringschedulingignoredduringexecution_size()) {
@@ -917,74 +1091,78 @@ void CpuCostModel::CalculatePodAffinityAntiAffinityPreference(
         }
       }
     }
+  }
+  unordered_map<ResourceID_t, PriorityScoresList_t,
+                boost::hash<boost::uuids::uuid>>* nodes_priority_scores_ptr =
+      FindOrNull(ec_to_node_priority_scores, ec);
+  if (!nodes_priority_scores_ptr) {
     unordered_map<ResourceID_t, PriorityScoresList_t,
-                  boost::hash<boost::uuids::uuid>>* nodes_priority_scores_ptr =
-        FindOrNull(ec_to_node_priority_scores, ec);
-    if (!nodes_priority_scores_ptr) {
-      unordered_map<ResourceID_t, PriorityScoresList_t,
-                    boost::hash<boost::uuids::uuid>>
-          node_to_priority_scores_map;
-      InsertIfNotPresent(&ec_to_node_priority_scores, ec,
-                         node_to_priority_scores_map);
-      nodes_priority_scores_ptr = FindOrNull(ec_to_node_priority_scores, ec);
-    }
-    CHECK_NOTNULL(nodes_priority_scores_ptr);
-    ResourceID_t res_id = ResourceIDFromString(rd.uuid());
-    PriorityScoresList_t* priority_scores_struct_ptr =
+                  boost::hash<boost::uuids::uuid>>
+        node_to_priority_scores_map;
+    InsertIfNotPresent(&ec_to_node_priority_scores, ec,
+                       node_to_priority_scores_map);
+    nodes_priority_scores_ptr = FindOrNull(ec_to_node_priority_scores, ec);
+  }
+  CHECK_NOTNULL(nodes_priority_scores_ptr);
+  ResourceID_t res_id = ResourceIDFromString(rd.uuid());
+  PriorityScoresList_t* priority_scores_struct_ptr =
+      FindOrNull(*nodes_priority_scores_ptr, res_id);
+  if (!priority_scores_struct_ptr) {
+    PriorityScoresList_t priority_scores_list;
+    InsertIfNotPresent(nodes_priority_scores_ptr, res_id,
+                       priority_scores_list);
+    priority_scores_struct_ptr =
         FindOrNull(*nodes_priority_scores_ptr, res_id);
-    if (!priority_scores_struct_ptr) {
-      PriorityScoresList_t priority_scores_list;
-      InsertIfNotPresent(nodes_priority_scores_ptr, res_id,
-                         priority_scores_list);
-      priority_scores_struct_ptr =
-          FindOrNull(*nodes_priority_scores_ptr, res_id);
-    }
-    CHECK_NOTNULL(priority_scores_struct_ptr);
-    PriorityScore_t& pod_affinity_score =
-        priority_scores_struct_ptr->pod_affinity_priority;
-    if (!sum_of_weights) {
-      pod_affinity_score.satisfy = false;
-    }
-    pod_affinity_score.score = sum_of_weights;
-    MinMaxScores_t* max_min_priority_scores =
-        FindOrNull(ec_to_max_min_priority_scores, ec);
-    if (!max_min_priority_scores) {
-      MinMaxScores_t priority_scores_list;
-      InsertIfNotPresent(&ec_to_max_min_priority_scores, ec,
-                         priority_scores_list);
-      max_min_priority_scores = FindOrNull(ec_to_max_min_priority_scores, ec);
-    }
-    CHECK_NOTNULL(max_min_priority_scores);
-    MinMaxScore_t& min_max_pod_affinity_score =
-        max_min_priority_scores->pod_affinity_priority;
-    if (min_max_pod_affinity_score.max_score < sum_of_weights ||
-        min_max_pod_affinity_score.max_score == -1) {
-      min_max_pod_affinity_score.max_score = sum_of_weights;
-    }
-    if (min_max_pod_affinity_score.min_score > sum_of_weights ||
-        min_max_pod_affinity_score.min_score == -1) {
-      min_max_pod_affinity_score.min_score = sum_of_weights;
-    }
+  }
+  CHECK_NOTNULL(priority_scores_struct_ptr);
+  PriorityScore_t& pod_affinity_score =
+      priority_scores_struct_ptr->pod_affinity_priority;
+  if (!sum_of_weights) {
+    pod_affinity_score.satisfy = false;
+  }
+  pod_affinity_score.score = sum_of_weights;
+  MinMaxScores_t* max_min_priority_scores =
+      FindOrNull(ec_to_max_min_priority_scores, ec);
+  if (!max_min_priority_scores) {
+    MinMaxScores_t priority_scores_list;
+    InsertIfNotPresent(&ec_to_max_min_priority_scores, ec,
+                       priority_scores_list);
+    max_min_priority_scores = FindOrNull(ec_to_max_min_priority_scores, ec);
+  }
+  CHECK_NOTNULL(max_min_priority_scores);
+  MinMaxScore_t& min_max_pod_affinity_score =
+      max_min_priority_scores->pod_affinity_priority;
+  if (min_max_pod_affinity_score.max_score < sum_of_weights ||
+      min_max_pod_affinity_score.max_score == -1) {
+    min_max_pod_affinity_score.max_score = sum_of_weights;
+  }
+  if (min_max_pod_affinity_score.min_score > sum_of_weights ||
+      min_max_pod_affinity_score.min_score == -1) {
+    min_max_pod_affinity_score.min_score = sum_of_weights;
   }
 }
 
 // Pod affinity/anti-affinity symmetry.
-void CpuCostModel::UpdateResourceToTaskSymmetryMap(ResourceID_t res_id, TaskID_t task_id) {
+void CpuCostModel::UpdateResourceToTaskSymmetryMap(ResourceID_t res_id,
+                                                   TaskID_t task_id) {
   ResourceID_t machine_res_id = MachineResIDForResource(res_id);
-  vector<TaskID_t>* tasks = FindOrNull(resource_to_task_symmetry_map_, machine_res_id);
+  vector<TaskID_t>* tasks =
+      FindOrNull(resource_to_task_symmetry_map_, machine_res_id);
   if (tasks) {
     tasks->push_back(task_id);
   } else {
     vector<TaskID_t> task_vec;
     task_vec.push_back(task_id);
-    InsertIfNotPresent(&resource_to_task_symmetry_map_, machine_res_id, task_vec);
+    InsertIfNotPresent(&resource_to_task_symmetry_map_, machine_res_id,
+                       task_vec);
   }
 }
 
 void CpuCostModel::RemoveTaskFromTaskSymmetryMap(TaskDescriptor* td_ptr) {
   ResourceID_t res_id = ResourceIDFromString(td_ptr->scheduled_to_resource());
   ResourceID_t machine_res_id = MachineResIDForResource(res_id);
-  vector<TaskID_t>* tasks = FindOrNull(resource_to_task_symmetry_map_, machine_res_id);
+  vector<TaskID_t>* tasks =
+      FindOrNull(resource_to_task_symmetry_map_, machine_res_id);
   if (tasks) {
     auto it = find(tasks->begin(), tasks->end(), td_ptr->uid());
     if (it != tasks->end()) {
@@ -996,7 +1174,13 @@ void CpuCostModel::RemoveTaskFromTaskSymmetryMap(TaskDescriptor* td_ptr) {
   }
 }
 
-bool CpuCostModel::SatisfiesSymmetryMatchExpression(unordered_multimap<string, string> task_labels, LabelSelectorRequirement expression_selector) {
+void CpuCostModel::RemoveECFromPodSymmetryMap(EquivClass_t ec) {
+  ecs_with_pod_antiaffinity_symmetry_.erase(ec);
+}
+
+bool CpuCostModel::SatisfiesSymmetryMatchExpression(
+    unordered_multimap<string, string> task_labels,
+    LabelSelectorRequirement expression_selector) {
   auto range_it = task_labels.equal_range(expression_selector.key());
   if (expression_selector.operator_() == std::string("In")) {
     for (auto it = range_it.first; it != range_it.second; it++) {
@@ -1021,12 +1205,28 @@ bool CpuCostModel::SatisfiesSymmetryMatchExpression(unordered_multimap<string, s
   } else if (expression_selector.operator_() == std::string("DoesNotExist")) {
     return !(range_it.first != range_it.second);
   } else {
-    LOG(FATAL) << "Unsupported selector type: " << expression_selector.operator_();
+    LOG(FATAL) << "Unsupported selector type: "
+               << expression_selector.operator_();
   }
   return false;
 }
 
-bool CpuCostModel::SatisfiesPodAntiAffinitySymmetryMatchExpressions(unordered_multimap<string, string> task_labels, const RepeatedPtrField<LabelSelectorRequirementAntiAff>& matchexpressions) {
+bool CpuCostModel::SatisfiesPodAffinitySymmetryMatchExpressions(
+    unordered_multimap<string, string> task_labels,
+    const RepeatedPtrField<LabelSelectorRequirement>& matchexpressions) {
+  for (auto& expression_selector : matchexpressions) {
+    if (SatisfiesSymmetryMatchExpression(task_labels, expression_selector)) {
+      continue;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CpuCostModel::SatisfiesPodAntiAffinitySymmetryMatchExpressions(
+    unordered_multimap<string, string> task_labels,
+    const RepeatedPtrField<LabelSelectorRequirementAntiAff>& matchexpressions) {
   for (auto& expression : matchexpressions) {
     LabelSelectorRequirement expression_selector;
     expression_selector.set_key(expression.key());
@@ -1043,7 +1243,36 @@ bool CpuCostModel::SatisfiesPodAntiAffinitySymmetryMatchExpressions(unordered_mu
   return true;
 }
 
-bool CpuCostModel::SatisfiesPodAntiAffinitySymmetryTerm(const TaskDescriptor& td, const TaskDescriptor& target_td, unordered_multimap<string, string> task_labels, const PodAffinityTermAntiAff term) {
+bool CpuCostModel::SatisfiesPodAffinitySymmetryTerm(
+    const TaskDescriptor& td, const TaskDescriptor& target_td,
+    unordered_multimap<string, string> task_labels,
+    const PodAffinityTerm& term) {
+  if (!term.namespaces_size()) {
+    namespaces.insert(target_td.task_namespace());
+  } else {
+    for (auto name : term.namespaces()) {
+      namespaces.insert(name);
+    }
+  }
+  if (!HasNamespace(td.task_namespace())) {
+    return false;
+  }
+  if (term.has_labelselector()) {
+    if (term.labelselector().matchexpressions_size()) {
+      if (!SatisfiesPodAffinitySymmetryMatchExpressions(
+              task_labels, term.labelselector().matchexpressions())) {
+        return false;
+      }
+    }
+  }
+  namespaces.clear();
+  return true;
+}
+
+bool CpuCostModel::SatisfiesPodAntiAffinitySymmetryTerm(
+    const TaskDescriptor& td, const TaskDescriptor& target_td,
+    unordered_multimap<string, string> task_labels,
+    const PodAffinityTermAntiAff term) {
   if (!term.namespaces_size()) {
     namespaces.insert(target_td.task_namespace());
   } else {
@@ -1066,9 +1295,13 @@ bool CpuCostModel::SatisfiesPodAntiAffinitySymmetryTerm(const TaskDescriptor& td
   return true;
 }
 
-bool CpuCostModel::SatisfiesPodAntiAffinityTermsSymmetry(const TaskDescriptor& td, const TaskDescriptor& target_td, unordered_multimap<string, string> task_labels, const RepeatedPtrField<PodAffinityTermAntiAff>& podantiaffinityterms) {
+bool CpuCostModel::SatisfiesPodAntiAffinityTermsSymmetry(
+    const TaskDescriptor& td, const TaskDescriptor& target_td,
+    unordered_multimap<string, string> task_labels,
+    const RepeatedPtrField<PodAffinityTermAntiAff>& podantiaffinityterms) {
   for (auto& term : podantiaffinityterms) {
-    if (!SatisfiesPodAntiAffinitySymmetryTerm(td, target_td, task_labels, term)) {
+    if (!SatisfiesPodAntiAffinitySymmetryTerm(td, target_td, task_labels,
+                                              term)) {
       return false;
     }
   }
@@ -1076,7 +1309,8 @@ bool CpuCostModel::SatisfiesPodAntiAffinityTermsSymmetry(const TaskDescriptor& t
 }
 
 // Hard constraint check for pod anti-affinity symmetry.
-bool CpuCostModel::SatisfiesPodAntiAffinitySymmetry(ResourceID_t res_id, const TaskDescriptor& td) {
+bool CpuCostModel::SatisfiesPodAntiAffinitySymmetry(ResourceID_t res_id,
+                                                    const TaskDescriptor& td) {
   unordered_multimap<string, string> task_labels;
   for (const auto& label : td.labels()) {
     task_labels.insert(pair<string, string>(label.key(), label.value()));
@@ -1088,8 +1322,13 @@ bool CpuCostModel::SatisfiesPodAntiAffinitySymmetry(ResourceID_t res_id, const T
       if (target_td_ptr) {
         if (target_td_ptr->has_affinity()) {
           Affinity affinity = target_td_ptr->affinity();
-          if (affinity.has_pod_anti_affinity() && affinity.pod_anti_affinity().requiredduringschedulingignoredduringexecution_size()) {
-            if (!SatisfiesPodAntiAffinityTermsSymmetry(td, *target_td_ptr, task_labels, affinity.pod_anti_affinity().requiredduringschedulingignoredduringexecution())) {
+          if (affinity.has_pod_anti_affinity() &&
+              affinity.pod_anti_affinity()
+                  .requiredduringschedulingignoredduringexecution_size()) {
+            if (!SatisfiesPodAntiAffinityTermsSymmetry(
+                    td, *target_td_ptr, task_labels,
+                    affinity.pod_anti_affinity()
+                        .requiredduringschedulingignoredduringexecution())) {
               return false;
             }
           }
@@ -1099,7 +1338,6 @@ bool CpuCostModel::SatisfiesPodAntiAffinitySymmetry(ResourceID_t res_id, const T
   }
   return true;
 }
-
 
 vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
     EquivClass_t ec) {
@@ -1128,7 +1366,7 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
         } else
           continue;
         // Checking pod affinity/anti-affinity
-        if (SatisfiesPodAffinityAntiAffinityRequired(rd, *td_ptr)) {
+        if (SatisfiesPodAffinityAntiAffinityRequired(rd, *td_ptr, ec)) {
           CalculatePodAffinityAntiAffinityPreference(rd, *td_ptr, ec);
         } else {
           continue;
