@@ -415,7 +415,7 @@ vector<EquivClass_t>* CpuCostModel::GetTaskEquivClasses(TaskID_t task_id) {
   CHECK_NOTNULL(task_resource_request);
   size_t task_agg = 0;
   bool pod_antiaffinity_symmetry = false;
-  if (td_ptr->has_affinity() || td_ptr->tolerations_size()) {
+  if (td_ptr->has_affinity() || (td_ptr->tolerations_size() > DEFAULT_TOLERATIONS)) {
     // For tasks which has affinity requirements, we hash the job id.
     // TODO(jagadish): This hash has to be handled in an efficient way in
     // future.
