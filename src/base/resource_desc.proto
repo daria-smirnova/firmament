@@ -11,6 +11,7 @@ import "base/coco_interference_scores.proto";
 import "base/label.proto";
 import "base/resource_vector.proto";
 import "base/whare_map_stats.proto";
+import "base/taints.proto";
 
 message ResourceDescriptor {
   enum ResourceState {
@@ -62,4 +63,7 @@ message ResourceDescriptor {
   uint64 trace_machine_id = 21;
   // Resource labels
   repeated Label labels = 32;
+  //Taints 
+  repeated Taint taints = 33;
+
 }

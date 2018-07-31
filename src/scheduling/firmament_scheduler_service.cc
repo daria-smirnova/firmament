@@ -19,8 +19,8 @@
  */
 
 #include <grpc++/grpc++.h>
-#include <chrono>
 
+#include <ctime>
 #include "base/resource_status.h"
 #include "base/resource_topology_node_desc.pb.h"
 #include "base/units.h"
@@ -59,7 +59,7 @@ DEFINE_string(firmament_scheduler_service_port, "9090",
               "The port of the scheduler service");
 DECLARE_bool(resource_stats_update_based_on_resource_reservation);
 DEFINE_string(service_scheduler, "flow", "Scheduler to use: flow | simple");
-DEFINE_uint64(queue_based_scheduling_time, 1, "Queue Based Schedule run time");
+DEFINE_uint64(queue_based_scheduling_time, 100, "Queue Based Schedule run time");
 
 namespace firmament {
 
@@ -164,17 +164,14 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     SchedulerStats sstat;
     vector<SchedulingDelta> deltas;
     scheduler_->ScheduleAllJobs(&sstat, &deltas);
+    clock_t start = clock();
+    uint64_t elapsed = 0;
     // Schedule tasks having pod affinity/anti-affinity
-    chrono::high_resolution_clock::time_point start =
-        chrono::high_resolution_clock::now();
-    chrono::duration<unsigned int> time_spent(
-        chrono::duration_values<unsigned int>::zero());
     while (affinity_antiaffinity_tasks_.size() &&
-           (time_spent.count() < FLAGS_queue_based_scheduling_time)) {
+           (elapsed < FLAGS_queue_based_scheduling_time)) {
       scheduler_->ScheduleAllQueueJobs(&sstat, &deltas);
-      chrono::high_resolution_clock::time_point end =
-          chrono::high_resolution_clock::now();
-      time_spent = chrono::duration_cast<chrono::seconds>(end - start);
+      clock_t stop = clock();
+      elapsed = (double)(stop - start) * 1000.0 / CLOCKS_PER_SEC;
     }
     // Extract results
     if (deltas.size()) {
@@ -382,7 +379,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     AddTaskToLabelsMap(task_desc_ptr->task_descriptor());
     JobID_t job_id = JobIDFromString(task_desc_ptr->task_descriptor().job_id());
     JobDescriptor* jd_ptr = FindOrNull(*job_map_, job_id);
-    // LOG(INFO) << "Job id is " << job_id ;
     if (jd_ptr == NULL) {
       CHECK(InsertIfNotPresent(job_map_.get(), job_id,
                                task_desc_ptr->job_descriptor()));
@@ -557,6 +553,10 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
         rs_ptr->mutable_topology_node(), *updated_rtnd_ptr,
         boost::bind(&FirmamentSchedulerServiceImpl::UpdateNodeLabels, this, _1,
                     _2));
+		DFSTraverseResourceProtobufTreesReturnRTNDs(
+		rs_ptr->mutable_topology_node(), *updated_rtnd_ptr,
+		boost::bind(&FirmamentSchedulerServiceImpl::UpdateNodeTaints, this, _1,
+                    _2));
     // TODO(ionel): Support other types of node updates.
     reply->set_type(NodeReplyType::NODE_UPDATED_OK);
     return Status::OK;
@@ -572,6 +572,17 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       label_ptr->CopyFrom(label);
     }
   }
+  
+  void UpdateNodeTaints(ResourceTopologyNodeDescriptor* old_rtnd_ptr,
+                        const ResourceTopologyNodeDescriptor& new_rtnd_ptr) {
+	ResourceDescriptor* old_rd_ptr = old_rtnd_ptr->mutable_resource_desc();
+    const ResourceDescriptor& new_rd = new_rtnd_ptr.resource_desc();	
+	old_rd_ptr->clear_taints();
+	for (const auto& taint : new_rd.taints()) {
+		Taint* taint_ptr = old_rd_ptr->add_taints();
+		taint_ptr->CopyFrom(taint);
+    	}
+	}
 
   Status AddTaskStats(ServerContext* context, const TaskStats* task_stats,
                       TaskStatsResponse* reply) override {

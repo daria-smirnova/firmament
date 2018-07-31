@@ -222,6 +222,17 @@ class CostModelInterface {
     flow_graph_manager_ = flow_graph_manager;
   }
 
+  virtual pair<TaskID_t, ResourceID_t> GetTaskMappingForSingleTask(TaskID_t task_id) {
+    pair<TaskID_t, ResourceID_t> delta;
+    delta.first = task_id;
+#ifdef __PLATFORM_HAS_BOOST__
+    delta.second = boost::uuids::nil_uuid();
+#else
+    delta.second = 0;
+#endif
+    return delta;
+  }
+
  protected:
   shared_ptr<FlowGraphManager> flow_graph_manager_;
 };

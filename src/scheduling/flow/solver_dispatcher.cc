@@ -297,6 +297,13 @@ multimap<uint64_t, uint64_t>* SolverDispatcher::Run(
   return task_mappings;
 }
 
+pair<TaskID_t, ResourceID_t> SolverDispatcher::RunSimpleSolverForSingleTask(
+    SchedulerStats* scheduler_stats, TaskID_t single_task_id) {
+  pair<TaskID_t, ResourceID_t> delta =
+    flow_graph_manager_->cost_model()->GetTaskMappingForSingleTask(single_task_id);
+  return delta;
+}
+
 void SolverDispatcher::SolverConfiguration(const string& solver,
                                            string* binary,
                                            vector<string> *args) {
