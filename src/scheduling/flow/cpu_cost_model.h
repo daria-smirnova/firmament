@@ -147,7 +147,8 @@ class CpuCostModel : public CostModelInterface {
       const ResourceDescriptor& rd, const TaskDescriptor& td,
       const RepeatedPtrField<PodAffinityTerm>& podaffinityterms);
   bool SatisfiesPodAffinityAntiAffinityRequired(const ResourceDescriptor& rd,
-                                                const TaskDescriptor& td);
+                                                const TaskDescriptor& td,
+                                                const EquivClass_t ec);
   void CalculatePodAffinityAntiAffinityPreference(const ResourceDescriptor& rd,
                                                   const TaskDescriptor& td,
                                                   const EquivClass_t ec);
@@ -155,6 +156,43 @@ class CpuCostModel : public CostModelInterface {
   void CalculateIntolerableTaintsCost(const ResourceDescriptor& rd,
                                                   const TaskDescriptor* td,
                                                   const EquivClass_t ec);
+  // Pod affinity/anti-affinity symmetry
+  bool CheckPodAffinityAntiAffinitySymmetryConflict(TaskDescriptor* td_ptr);
+  void UpdateResourceToTaskSymmetryMap(ResourceID_t res_id, TaskID_t td);
+  void RemoveTaskFromTaskSymmetryMap(TaskDescriptor* td_ptr);
+  void RemoveECFromPodSymmetryMap(EquivClass_t ec);
+  bool SatisfiesSymmetryMatchExpression(
+      unordered_multimap<string, string> task_labels,
+      LabelSelectorRequirement expression_selector);
+  bool SatisfiesPodAffinitySymmetryMatchExpressions(
+      unordered_multimap<string, string> task_labels,
+      const RepeatedPtrField<LabelSelectorRequirement>& matchexpressions);
+  bool SatisfiesPodAntiAffinitySymmetryMatchExpressions(
+      unordered_multimap<string, string> task_labels,
+      const RepeatedPtrField<LabelSelectorRequirementAntiAff>&
+          matchexpressions);
+  bool SatisfiesPodAffinitySymmetryTerm(
+      const TaskDescriptor& td, const TaskDescriptor& target_td,
+      unordered_multimap<string, string> task_labels,
+      const PodAffinityTerm& term);
+  bool SatisfiesPodAntiAffinitySymmetryTerm(
+      const TaskDescriptor& td, const TaskDescriptor& target_td,
+      unordered_multimap<string, string> task_labels,
+      const PodAffinityTermAntiAff podantiaffinityterm);
+  bool SatisfiesPodAntiAffinityTermsSymmetry(
+      const TaskDescriptor& td, const TaskDescriptor& target_td,
+      unordered_multimap<string, string> task_labels,
+      const RepeatedPtrField<PodAffinityTermAntiAff>& podantiaffinityterms);
+  bool SatisfiesPodAntiAffinitySymmetry(ResourceID_t res_id,
+                                        const TaskDescriptor& td);
+  int64_t CalculatePodAffinitySymmetryPreference(
+      Affinity affinity, const TaskDescriptor& td,
+      const TaskDescriptor& target_td,
+      unordered_multimap<string, string> task_labels);
+  int64_t CalculatePodAntiAffinitySymmetryPreference(
+      Affinity affinity, const TaskDescriptor& td,
+      const TaskDescriptor& target_td,
+      unordered_multimap<string, string> task_labels);
   vector<EquivClass_t>* GetEquivClassToEquivClassesArcs(EquivClass_t tec);
   void AddMachine(ResourceTopologyNodeDescriptor* rtnd_ptr);
   void AddTask(TaskID_t task_id);
@@ -223,6 +261,9 @@ class CpuCostModel : public CostModelInterface {
   // Pod affinity/anti-affinity
   unordered_map<string, unordered_map<string, vector<TaskID_t>>>* labels_map_;
   unordered_set<string> namespaces;
+  // Pod affinity/anti-affinity symmetry
+  unordered_map<ResourceID_t, vector<TaskID_t>, boost::hash<ResourceID_t>> resource_to_task_symmetry_map_;
+  unordered_set<EquivClass_t> ecs_with_pod_antiaffinity_symmetry_;
   unordered_map<EquivClass_t, ResourceID_t> ec_to_best_fit_resource_;
   unordered_map<EquivClass_t, Cost_t> ec_to_min_cost_;
   unordered_map<string, string> tolerationSoftEqualMap;
