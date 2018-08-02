@@ -573,7 +573,7 @@ void CpuCostModel::CalculateIntolerableTaintsCost(const ResourceDescriptor& rd,
                                }
 
                         }
-               else if (tolerations.operator_() == "Equal"){
+               else if ((tolerations.operator_() == "Equal") || (tolerations.operator_() == "")){
 
                                InsertIfNotPresent(&tolerationSoftEqualMap,tolerations.key(),tolerations.value());
 

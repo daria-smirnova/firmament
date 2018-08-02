@@ -246,7 +246,7 @@ bool HasMatchingTolerationforNodeTaints(const ResourceDescriptor& rd,
           } else {
             IsTolerable = true;
           }
-        } else if (tolerations.operator_() == "Equal") {
+        } else if ((tolerations.operator_() == "Equal") || (tolerations.operator_() == "")) {
           if (tolerations.effect() != "") {
             InsertIfNotPresent(&tolerationHardEqualMap,
                                tolerations.key() + tolerations.effect(),
