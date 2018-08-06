@@ -514,7 +514,7 @@ void EventDrivenScheduler::KillRunningTask(
             << *rid << " (endpoint: " << td_ptr->last_heartbeat_location()
             << ")";
   m_adapter_ptr_->SendMessageToEndpoint(td_ptr->last_heartbeat_location(), bm);
-  if (!rid) {
+  if (rid) {
     CHECK(UnbindTaskFromResource(td_ptr, *rid));
   }
   trace_generator_->TaskKilled(task_id, rs_ptr->descriptor());
