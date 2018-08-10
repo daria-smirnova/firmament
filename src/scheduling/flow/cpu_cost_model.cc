@@ -573,7 +573,7 @@ void CpuCostModel::CalculateIntolerableTaintsCost(const ResourceDescriptor& rd,
                                }
 
                         }
-               else if (tolerations.operator_() == "Equal"){
+               else if ((tolerations.operator_() == "Equal") || (tolerations.operator_() == "")){
 
                                InsertIfNotPresent(&tolerationSoftEqualMap,tolerations.key(),tolerations.value());
 
@@ -1159,6 +1159,9 @@ void CpuCostModel::UpdateResourceToTaskSymmetryMap(ResourceID_t res_id,
 }
 
 void CpuCostModel::RemoveTaskFromTaskSymmetryMap(TaskDescriptor* td_ptr) {
+  if (td_ptr->scheduled_to_resource().empty()) {
+    return;
+  }
   ResourceID_t res_id = ResourceIDFromString(td_ptr->scheduled_to_resource());
   ResourceID_t machine_res_id = MachineResIDForResource(res_id);
   vector<TaskID_t>* tasks =

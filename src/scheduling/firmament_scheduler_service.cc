@@ -434,6 +434,7 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       label_sel_ptr->CopyFrom(label_selector);
     }
     // XXX(ionel): We may want to add support for other field updates as well.
+    reply->set_type(TaskReplyType::TASK_UPDATED_OK);
     return Status::OK;
   }
 
