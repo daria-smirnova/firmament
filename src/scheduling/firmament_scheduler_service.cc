@@ -161,6 +161,8 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
 
   Status Schedule(ServerContext* context, const ScheduleRequest* request,
                   SchedulingDeltas* reply) override {
+    boost::lock_guard<boost::recursive_mutex> lock(
+        scheduler_->scheduling_lock_);
     SchedulerStats sstat;
     vector<SchedulingDelta> deltas;
     scheduler_->ScheduleAllJobs(&sstat, &deltas);
