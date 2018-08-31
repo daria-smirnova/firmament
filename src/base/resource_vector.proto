@@ -15,4 +15,5 @@ message ResourceVector {
   uint64 disk_cap = 5; // in KB
   uint64 net_tx_bw = 6; // in KB
   uint64 net_rx_bw = 7; // in KB
+  uint64 ephemeral_storage = 8;
 }
