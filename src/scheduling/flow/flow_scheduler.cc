@@ -221,6 +221,10 @@ uint64_t FlowScheduler::ApplySchedulingDeltas(
           resource_stats.set_mem_allocatable(
               resource_stats.mem_allocatable() -
               td_ptr->resource_request().ram_cap());
+          // ephemeral storage
+          resource_stats.set_ephemeral_storage_allocatable(
+              resource_stats.ephemeral_storage_allocatable() -
+              td_ptr->resource_request().ephemeral_storage());
           double cpu_utilization =
               (cpu_stats->cpu_capacity() - cpu_stats->cpu_allocatable()) /
               (double)cpu_stats->cpu_capacity();
@@ -229,6 +233,10 @@ uint64_t FlowScheduler::ApplySchedulingDeltas(
                                     resource_stats.mem_allocatable()) /
                                    (double)resource_stats.mem_capacity();
           resource_stats.set_mem_utilization(mem_utilization);
+          double ephemeral_storage_utilization = (resource_stats.ephemeral_storage_capacity() -
+                                    resource_stats.ephemeral_storage_allocatable()) /
+                                   (double)resource_stats.ephemeral_storage_capacity();
+          resource_stats.set_ephemeral_storage_utilization(ephemeral_storage_utilization);
           knowledge_base_->AddMachineSample(resource_stats);
         }
       }
@@ -256,6 +264,9 @@ uint64_t FlowScheduler::ApplySchedulingDeltas(
           resource_stats.set_mem_allocatable(
               resource_stats.mem_allocatable() +
               td_ptr->resource_request().ram_cap());
+          resource_stats.set_ephemeral_storage_allocatable(
+              resource_stats.ephemeral_storage_allocatable() +
+              td_ptr->resource_request().ephemeral_storage());
           double cpu_utilization =
               (cpu_stats->cpu_capacity() - cpu_stats->cpu_allocatable()) /
               (double)cpu_stats->cpu_capacity();
@@ -264,6 +275,10 @@ uint64_t FlowScheduler::ApplySchedulingDeltas(
                                     resource_stats.mem_allocatable()) /
                                    (double)resource_stats.mem_capacity();
           resource_stats.set_mem_utilization(mem_utilization);
+          double ephemeral_storage_utilization = (resource_stats.ephemeral_storage_capacity() -
+                                    resource_stats.ephemeral_storage_allocatable()) /
+                                   (double)resource_stats.ephemeral_storage_capacity();
+          resource_stats.set_ephemeral_storage_utilization(ephemeral_storage_utilization);
           knowledge_base_->AddMachineSample(resource_stats);
         }
       }
