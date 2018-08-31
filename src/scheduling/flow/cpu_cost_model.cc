@@ -433,7 +433,6 @@ vector<EquivClass_t>* CpuCostModel::GetTaskEquivClasses(TaskID_t task_id) {
       task_agg = HashJobID(*td_ptr);
     } else if (task_resource_request->ephemeral_storage_ > 0) {
       //In case if ephemeral storage is specified.
-      LOG(INFO) << "GetTaskEquivClasses: ephemeral storage present for task=" << task_id << ", ephemeral_storage=" << task_resource_request->ephemeral_storage_;
       boost::hash_combine(
           task_agg, to_string(task_resource_request->cpu_cores_) + "cpu" +
                         to_string(task_resource_request->ram_cap_) + "mem" +
@@ -1408,8 +1407,6 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
           static_cast<uint64_t>(rd.available_resources().ram_cap());
       available_resources.ephemeral_storage_ =
           static_cast<uint64_t>(rd.available_resources().ephemeral_storage());
-      LOG(INFO) << "Machine: " << rd.friendly_name();
-      LOG(INFO) << "GetEquivClassToEquivClassesArcs: available_resources.ephemeral_storage=" << rd.available_resources().ephemeral_storage();
       ResourceID_t res_id = ResourceIDFromString(rd.uuid());
       vector<EquivClass_t>* ecs_for_machine =
           FindOrNull(ecs_for_machines_, res_id);
@@ -1459,7 +1456,6 @@ void CpuCostModel::AddTask(TaskID_t task_id) {
   resource_request.ram_cap_ =
       static_cast<uint64_t>(td.resource_request().ram_cap());
   // ephemeral storage
-  LOG(INFO) << "AddTask: adding to resource_request value=" << td.resource_request().ephemeral_storage();
   resource_request.ephemeral_storage_ =
       static_cast<uint64_t>(td.resource_request().ephemeral_storage());
   CHECK(InsertIfNotPresent(&task_resource_requirement_, task_id,

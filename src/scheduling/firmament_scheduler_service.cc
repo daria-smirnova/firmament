@@ -390,7 +390,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       reply->set_type(TaskReplyType::TASK_STATE_NOT_CREATED);
       return Status::OK;
     }
-    LOG(INFO) << "TaskSubmitted: task=" << task_id << ", ephemeral_storage=" << task_desc_ptr->task_descriptor().resource_request().ephemeral_storage();
     AddTaskToLabelsMap(task_desc_ptr->task_descriptor());
     JobID_t job_id = JobIDFromString(task_desc_ptr->task_descriptor().job_id());
     JobDescriptor* jd_ptr = FindOrNull(*job_map_, job_id);
@@ -525,7 +524,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       resource_stats.set_net_rx_bw(0);
       resource_stats.set_net_tx_bw(0);
       // ephemeral storage
-      LOG(INFO) << "NodeAdded: ephemeral_storage=" << rtnd_ptr->resource_desc().resource_capacity().ephemeral_storage();
       resource_stats.set_ephemeral_storage_capacity(
           rtnd_ptr->resource_desc().resource_capacity().ephemeral_storage());
       resource_stats.set_ephemeral_storage_utilization(0.1);
