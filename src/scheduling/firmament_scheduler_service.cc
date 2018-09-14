@@ -386,6 +386,9 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
                                task_desc_ptr->job_descriptor()));
       jd_ptr = FindOrNull(*job_map_, job_id);
       TaskDescriptor* root_td_ptr = jd_ptr->mutable_root_task();
+      // Task that comes first is made as root task of the job.
+      // Root task that was set in poseidon is ignored.
+      root_td_ptr->CopyFrom(task_desc_ptr->task_descriptor());
       CHECK(
           InsertIfNotPresent(task_map_.get(), root_td_ptr->uid(), root_td_ptr));
       root_td_ptr->set_submit_time(wall_time_.GetCurrentTimestamp());
