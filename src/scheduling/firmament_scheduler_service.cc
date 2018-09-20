@@ -204,7 +204,7 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     for (const auto& label : td.labels()) {
       unordered_map<string, vector<TaskID_t>>* label_values =
           FindOrNull(labels_map_, label.key());
-      if (!label_values) {
+      if (label_values) {
         vector<TaskID_t>* labels_map_tasks =
             FindOrNull(*label_values, label.value());
         if (labels_map_tasks) {
