@@ -1463,15 +1463,17 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
         pref_ecs->push_back(ec_machines.second[index]);
       }
     }
-    if (pref_ecs->size() == 0) {
-      // So tasks connected to this task EC will never be scheduled, so populate
-      // this 'ec' to 'task_ec_with_no_pref_arcs_'. Reason why tasks not
-      // scheduled could be 1) Not enough cpu/mem 2) Any nodes not satisfying
-      // scheduling constraints like affinity etc.
-      if (task_ec_with_no_pref_arcs_set_.find(ec) ==
-          task_ec_with_no_pref_arcs_set_.end()) {
-        task_ec_with_no_pref_arcs_.push_back(ec);
-        task_ec_with_no_pref_arcs_set_.insert(ec);
+    if (FLAGS_gather_unscheduled_tasks) {
+      if (pref_ecs->size() == 0) {
+        // So tasks connected to this task EC will never be scheduled, so populate
+        // this 'ec' to 'task_ec_with_no_pref_arcs_'. Reason why tasks not
+        // scheduled could be 1) Not enough cpu/mem 2) Any nodes not satisfying
+        // scheduling constraints like affinity etc.
+        if (task_ec_with_no_pref_arcs_set_.find(ec) ==
+            task_ec_with_no_pref_arcs_set_.end()) {
+          task_ec_with_no_pref_arcs_.push_back(ec);
+          task_ec_with_no_pref_arcs_set_.insert(ec);
+        }
       }
     }
   }

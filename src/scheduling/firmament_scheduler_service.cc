@@ -192,7 +192,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     clock_t start = clock();
     uint64_t elapsed = 0;
     unordered_set<uint64_t> unscheduled_tasks_set;
-    unordered_set<uint64_t> scheduled_tasks_set;
     // Schedule tasks having pod affinity/anti-affinity.
     while (affinity_antiaffinity_tasks_.size() &&
            (elapsed < FLAGS_queue_based_scheduling_time)) {
@@ -200,18 +199,15 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
           scheduler_->ScheduleAllQueueJobs(&sstat, &deltas);
       TaskID_t task_id = dynamic_cast<FlowScheduler*>(scheduler_)
                              ->GetSingleTaskTobeScheduled();
-      if (!task_scheduled) {
-        if (FLAGS_gather_unscheduled_tasks) {
+      if (FLAGS_gather_unscheduled_tasks) {
+        if (!task_scheduled) {
           if (unscheduled_tasks_set.find(task_id) ==
               unscheduled_tasks_set.end()) {
             unscheduled_tasks_set.insert(task_id);
             unscheduled_tasks.push_back(task_id);
           }
-        }
-      } else {
-        if (FLAGS_gather_unscheduled_tasks) {
+        } else {
           unscheduled_tasks_set.erase(task_id);
-          scheduled_tasks_set.insert(task_id);
         }
       }
       clock_t stop = clock();
@@ -224,8 +220,8 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       LOG(INFO) << "Got " << unscheduled_tasks.size() << " unscheduled tasks";
       auto unscheduled_tasks_ret = reply->mutable_unscheduled_tasks();
       for (auto& unsched_task : unscheduled_tasks) {
-        if (scheduled_tasks_set.find(unsched_task) ==
-            scheduled_tasks_set.end()) {
+        if (unscheduled_tasks_set.find(unsched_task) !=
+            unscheduled_tasks_set.end()) {
           uint64_t* unsched_task_ret = unscheduled_tasks_ret->Add();
           *unsched_task_ret = unsched_task;
         }
