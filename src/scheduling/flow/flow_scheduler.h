@@ -108,10 +108,16 @@ class FlowScheduler : public EventDrivenScheduler {
   const CostModelInterface& cost_model() const {
     return *cost_model_;
   }
+  CostModelInterface* cost_model() {
+    return cost_model_;
+  }
   const SolverDispatcher& dispatcher() const {
     return *solver_dispatcher_;
   }
 
+  TaskID_t GetSingleTaskTobeScheduled() {
+    return task_to_be_scheduled_;
+  }
  protected:
   virtual void HandleTaskMigration(TaskDescriptor* td_ptr,
                                    ResourceDescriptor* rd_ptr);
@@ -154,6 +160,8 @@ class FlowScheduler : public EventDrivenScheduler {
   DIMACSChangeStats* dimacs_stats_;
   uint64_t solver_run_cnt_;
   unordered_set<ResourceTopologyNodeDescriptor*> resource_roots_;
+  // Single task that needs to scheduled in queue based scheduling round.
+  TaskID_t task_to_be_scheduled_;
 };
 
 }  // namespace scheduler

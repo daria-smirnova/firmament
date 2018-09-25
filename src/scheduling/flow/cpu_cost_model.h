@@ -202,6 +202,12 @@ class CpuCostModel : public CostModelInterface {
   void PrepareStats(FlowGraphNode* accumulator);
   FlowGraphNode* UpdateStats(FlowGraphNode* accumulator, FlowGraphNode* other);
   pair<TaskID_t, ResourceID_t> GetTaskMappingForSingleTask(TaskID_t task_id);
+  // Get all the tasks that are connected to task EC.
+  vector<uint64_t>* GetTasksConnectedToTaskEC(TaskID_t task_id);
+  // Clear unscheduled tasks related maps and sets.
+  void ClearUnscheduledTasksData();
+  // Get unscheduled tasks in a scheduling round.
+  void GetUnscheduledTasks(vector<uint64_t>* unscheduled_tasks_ptr);
 
  private:
   // Fixed value for OMEGA, the normalization ceiling for each dimension's cost
@@ -268,6 +274,11 @@ class CpuCostModel : public CostModelInterface {
   unordered_map<EquivClass_t, Cost_t> ec_to_min_cost_;
   unordered_map<string, string> tolerationSoftEqualMap;
   unordered_map<string, string> tolerationSoftExistsMap;
+  unordered_set<EquivClass_t> task_ec_with_no_pref_arcs_set_;
+  vector<EquivClass_t> task_ec_with_no_pref_arcs_;
+  unordered_map<EquivClass_t, vector<uint64_t>> task_ec_to_connected_tasks_;
+  unordered_map<EquivClass_t, unordered_set<uint64_t>>
+    task_ec_to_connected_tasks_set_;
 };
 
 }  // namespace firmament

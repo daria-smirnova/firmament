@@ -53,6 +53,7 @@ DEFINE_uint64(max_solver_runtime, 100000000,
               "Maximum runtime of the solver in u-sec");
 DEFINE_int64(time_dependent_cost_update_frequency, 10000000ULL,
              "Update frequency for time-dependent costs, in microseconds.");
+DEFINE_bool(gather_unscheduled_tasks, true, "Gather unscheduled tasks");
 DEFINE_bool(debug_cost_model, false,
             "Store cost model debug info in CSV files.");
 DEFINE_uint64(purge_unconnected_ec_frequency, 10, "Frequency in solver runs "
@@ -553,6 +554,10 @@ uint64_t FlowScheduler::ScheduleJobs(const vector<JobDescriptor*>& jd_ptr_vect,
     // known before AddOrUpdateJobNodes is invoked below, as it may add arcs
     // depending on these metrics.
     UpdateCostModelResourceStats();
+    if (FLAGS_gather_unscheduled_tasks)  {
+      // Clear unscheduled tasks related maps and sets.
+      cost_model_->ClearUnscheduledTasksData();
+    }
     flow_graph_manager_->AddOrUpdateJobNodes(jds_with_runnables);
     num_scheduled_tasks += RunSchedulingIteration(scheduler_stats, deltas, &jds_with_runnables);
     VLOG(1) << "STOP SCHEDULING, placed " << num_scheduled_tasks << " tasks";
@@ -596,6 +601,7 @@ uint64_t FlowScheduler::RunSchedulingIteration(
     // TODO(malte): this can be removed when we've factored archived tasks
     // and jobs out of the job_map_ into separate data structures.
     // (cf. issue #24).
+    /*
     vector<JobDescriptor*> job_vec;
     for (auto it = job_map_->begin();
          it != job_map_->end();
@@ -607,8 +613,30 @@ uint64_t FlowScheduler::RunSchedulingIteration(
         job_vec.push_back(&it->second);
       }
     }
+    */
     // This will re-visit all jobs and update their time-dependent costs
+    // Changed above code to revisit only jobs from job_vector not from
+    // job_map_ i.e, jobs with pod affinty and pod anti-affinity are handled
+    // in sepearte scheduling round even for time dependent costs update.
+    // Jobs with pod affinty/anti-affinty are scheduled one task at a time
+    // in a single scheduling round, whereas for other jobs tasks are
+    // scheduled in a batch.
     VLOG(1) << "Flow scheduler updating time-dependent costs.";
+    vector<JobDescriptor*> job_vec;
+    for (auto it = (*job_vector).begin();
+         it != (*job_vector).end();
+         ++it) {
+      // We only need to reconsider this job if it is still active
+      if ((*it)->state() != JobDescriptor::COMPLETED &&
+          (*it)->state() != JobDescriptor::FAILED &&
+          (*it)->state() != JobDescriptor::ABORTED) {
+        job_vec.push_back(*it);
+      }
+    }
+    if (FLAGS_gather_unscheduled_tasks)  {
+      // Clear unscheduled tasks related maps and sets.
+      cost_model_->ClearUnscheduledTasksData();
+    }
     flow_graph_manager_->UpdateTimeDependentCosts(job_vec);
     last_updated_time_dependent_costs_ = cur_time;
   }
@@ -626,6 +654,8 @@ uint64_t FlowScheduler::RunSchedulingIteration(
   } else {
       string id = ((*job_vector)[0])->uuid();
       TaskID_t single_task_id = *(runnable_tasks_[JobIDFromString(id)].begin());
+      // Single task that needs to scheduled.
+      task_to_be_scheduled_ = single_task_id;
       pair<TaskID_t, ResourceID_t> single_delta =
         solver_dispatcher_->RunSimpleSolverForSingleTask(scheduler_stats,
                                                          single_task_id);
