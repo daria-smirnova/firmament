@@ -176,68 +176,91 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     }
   }
 
-  //TODO: 1)Need to handle the desired return type/value if not void.
-  // 2) Need to call this function from grpc service function after poseidon side
-  // implementation in order to update Non-Firmament related node information.
-  void UpdateNodeInfoForNonFirmamentTask (const ResourceUID* rid_ptr, const TaskStats* task_stats, bool task_added) {
-    ResourceID_t res_id = ResourceIDFromString(rid_ptr->resource_uid());
+  // Update Non-Firmament related node information.
+  void UpdateStatsToKnowledgeBase(ResourceStats* resource_stats,
+                                    CpuStats* cpu_stats) {
+    double cpu_utilization =
+        (cpu_stats->cpu_capacity() - cpu_stats->cpu_allocatable()) /
+        (double)cpu_stats->cpu_capacity();
+    cpu_stats->set_cpu_utilization(cpu_utilization);
+    double mem_utilization = (resource_stats->mem_capacity() -
+        resource_stats->mem_allocatable()) /
+        (double)resource_stats->mem_capacity();
+    resource_stats->set_mem_utilization(mem_utilization);
+    double ephemeral_storage_utilization = (resource_stats->ephemeral_storage_capacity() -
+        resource_stats->ephemeral_storage_allocatable()) /
+        (double)resource_stats->ephemeral_storage_capacity();
+    resource_stats->set_ephemeral_storage_utilization(ephemeral_storage_utilization);
+    knowledge_base_->AddMachineSample(*resource_stats);
+  }
+
+  Status AddTaskInfo (ServerContext* context, const TaskInfo* request,
+                      TaskInfoResponse* response) override {
+    //boost::lock_guard<boost::recursive_mutex> lock(
+      //  scheduler_->scheduling_lock_);
+    LOG(INFO) << "AddTaskInfo: task_name=" << request->task_name() << ", resource_id=" << request->resource_id() << ", cpu_utilization=" << request->cpu_utilization() << ", mem_utilization=" << request->mem_utilization() << ", ephemeral_storage_utilization=" << request->ephemeral_storage_utilization() << ", type=" << request->type();
+    ResourceID_t res_id = ResourceIDFromString(request->resource_id());
     ResourceStatus* rs_ptr = FindPtrOrNull(*resource_map_, res_id);
     if (rs_ptr == NULL || rs_ptr->mutable_descriptor() == NULL) {
-      return;
+      LOG(INFO) << "AddTaskInfo: resource not found!";
+      response->set_type(TaskInfoReplyType::TASKINFO_SUBMIT_FAILED);
+      return Status::OK;
     }
-    if (!task_stats) {
-      return;
-    }
-    TaskID_t task_id = task_stats->task_id();
-    TaskDescriptor* td_ptr = FindPtrOrNull(*task_map_, task_id);
-    if (td_ptr == NULL) {
-      ResourceStats resource_stats;
-      CpuStats* cpu_stats = resource_stats.add_cpus_stats();
-      bool have_sample = knowledge_base_->GetLatestStatsForMachine(
-          res_id, &resource_stats);
-      if (have_sample) {
-        if (task_added) {
+    ResourceStats resource_stats;
+    CpuStats* cpu_stats = resource_stats.add_cpus_stats();
+    bool have_sample = knowledge_base_->GetLatestStatsForMachine(
+        res_id, &resource_stats);
+    if (have_sample) {
+      LOG(INFO) << "have_sample true >>>>>>>>>>>>";
+      switch (request->type()) {
+        case TaskInfoType::TASKINFO_ADD: {
+          if (!InsertIfNotPresent(&task_resource_map_,
+                                   request->task_name(), res_id)) {
+            LOG(INFO) << "AddTaskInfo: TASKINFO_ADD failed as task already present";
+            response->set_type(TaskInfoReplyType::TASKINFO_SUBMIT_FAILED);
+            return Status::OK;
+          }
           cpu_stats->set_cpu_allocatable(
               cpu_stats->cpu_allocatable() -
-              task_stats->cpu_request());
+              request->cpu_utilization());
           resource_stats.set_mem_allocatable(
               resource_stats.mem_allocatable() -
-              task_stats->mem_request());
+              request->mem_utilization());
           resource_stats.set_ephemeral_storage_allocatable(
               resource_stats.ephemeral_storage_allocatable() -
-              task_stats->ephemeral_storage_request());
+              request->ephemeral_storage_utilization());
           knowledge_base_->UpdateResourceNonFirmamentTaskCount(res_id, true);
-        } else {
+          UpdateStatsToKnowledgeBase(&resource_stats, cpu_stats);
+          response->set_type(TaskInfoReplyType::TASKINFO_SUBMITTED_OK);
+          return Status::OK;
+        }
+        case TaskInfoType::TASKINFO_REMOVE: {
+          ResourceID_t* rid = FindOrNull(task_resource_map_,
+                                         request->task_name());
+          if (rid == NULL) {
+            LOG(INFO) << "AddTaskInfo: TASKINFO_REMOVE_FAILED";
+            response->set_type(TaskInfoReplyType::TASKINFO_REMOVE_FAILED);
+            return Status::OK;
+          }
           cpu_stats->set_cpu_allocatable(
               cpu_stats->cpu_allocatable() +
-              task_stats->cpu_request());
+              request->cpu_utilization());
           resource_stats.set_mem_allocatable(
               resource_stats.mem_allocatable() +
-              task_stats->mem_request());
+              request->mem_utilization());
           resource_stats.set_ephemeral_storage_allocatable(
               resource_stats.ephemeral_storage_allocatable() +
-              task_stats->ephemeral_storage_request());
+              request->ephemeral_storage_utilization());
           knowledge_base_->UpdateResourceNonFirmamentTaskCount(res_id, false);
+          UpdateStatsToKnowledgeBase(&resource_stats, cpu_stats);
+          response->set_type(TaskInfoReplyType::TASKINFO_REMOVED_OK);
+          return Status::OK;
         }
-        double cpu_utilization =
-            (cpu_stats->cpu_capacity() - cpu_stats->cpu_allocatable()) /
-            (double)cpu_stats->cpu_capacity();
-        cpu_stats->set_cpu_utilization(cpu_utilization);
-        double mem_utilization = (resource_stats.mem_capacity() -
-                                  resource_stats.mem_allocatable()) /
-                                 (double)resource_stats.mem_capacity();
-        resource_stats.set_mem_utilization(mem_utilization);
-        double ephemeral_storage_utilization = (resource_stats.ephemeral_storage_capacity() -
-                                  resource_stats.ephemeral_storage_allocatable()) /
-                                 (double)resource_stats.ephemeral_storage_capacity();
-        resource_stats.set_ephemeral_storage_utilization(ephemeral_storage_utilization);
-        knowledge_base_->AddMachineSample(resource_stats);
+        default:
+          LOG(FATAL) << "Unsupported request type: " << request->type();
       }
-      //reply->set_type(TaskReplyType::NODE_UPDATED_OK);
-      //return Status::OK;
-    } else {
-      LOG(FATAL) << "Task scheduled by Firmament, hence no need to update here";
     }
+    return Status::OK;
   }
 
   Status Schedule(ServerContext* context, const ScheduleRequest* request,
@@ -787,6 +810,7 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
   // Pod affinity/anti-affinity
   unordered_map<string, unordered_map<string, vector<TaskID_t>>> labels_map_;
   vector<TaskID_t> affinity_antiaffinity_tasks_;
+  unordered_map<string, ResourceID_t> task_resource_map_;
 
   ResourceStatus* CreateTopLevelResource() {
     ResourceID_t res_id = GenerateResourceID();
