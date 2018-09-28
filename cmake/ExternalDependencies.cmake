@@ -38,16 +38,16 @@ if (${ENABLE_PRIVATE_FLOWLESSLY})
       LOG_DOWNLOAD ON
       LOG_BUILD ON)
 else (${ENABLE_PRIVATE_FLOWLESSLY})
-  ExternalProject_Add(
-      flowlessly
-      GIT_REPOSITORY https://github.com/ICGog/Flowlessly.git
-      TIMEOUT 10
-      PREFIX ${CMAKE_CURRENT_BINARY_DIR}/third_party/flowlessly
+#  ExternalProject_Add(
+#      flowlessly
+#      GIT_REPOSITORY https://github.com/ICGog/Flowlessly.git
+#      TIMEOUT 10
+#      PREFIX ${CMAKE_CURRENT_BINARY_DIR}/third_party/flowlessly
       # no install required, we link the library from the build tree
-      INSTALL_COMMAND ""
+#      INSTALL_COMMAND ""
       # Wrap download, configure and build steps in a script to log output
-      LOG_DOWNLOAD ON
-      LOG_BUILD ON)
+#      LOG_DOWNLOAD ON
+#      LOG_BUILD ON)
 endif (${ENABLE_PRIVATE_FLOWLESSLY})
 
 ###############################################################################
@@ -82,6 +82,7 @@ find_package(GLog REQUIRED)
 ExternalProject_Add(
     gtest
     GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG 0fc5466dbb9e623029b1ada539717d10bd45e99e
     TIMEOUT 10
     PREFIX ${CMAKE_CURRENT_BINARY_DIR}/third_party/gtest
     # no install required, we link the library from the build tree
