@@ -198,11 +198,9 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
                       TaskInfoResponse* response) override {
     //boost::lock_guard<boost::recursive_mutex> lock(
       //  scheduler_->scheduling_lock_);
-    LOG(INFO) << "AddTaskInfo: task_name=" << request->task_name() << ", resource_id=" << request->resource_id() << ", cpu_utilization=" << request->cpu_utilization() << ", mem_utilization=" << request->mem_utilization() << ", ephemeral_storage_utilization=" << request->ephemeral_storage_utilization() << ", type=" << request->type();
     ResourceID_t res_id = ResourceIDFromString(request->resource_id());
     ResourceStatus* rs_ptr = FindPtrOrNull(*resource_map_, res_id);
     if (rs_ptr == NULL || rs_ptr->mutable_descriptor() == NULL) {
-      LOG(INFO) << "AddTaskInfo: resource not found!";
       response->set_type(TaskInfoReplyType::TASKINFO_SUBMIT_FAILED);
       return Status::OK;
     }
@@ -211,12 +209,10 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     bool have_sample = knowledge_base_->GetLatestStatsForMachine(
         res_id, &resource_stats);
     if (have_sample) {
-      LOG(INFO) << "have_sample true >>>>>>>>>>>>";
       switch (request->type()) {
         case TaskInfoType::TASKINFO_ADD: {
           if (!InsertIfNotPresent(&task_resource_map_,
                                    request->task_name(), res_id)) {
-            LOG(INFO) << "AddTaskInfo: TASKINFO_ADD failed as task already present";
             response->set_type(TaskInfoReplyType::TASKINFO_SUBMIT_FAILED);
             return Status::OK;
           }
@@ -238,7 +234,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
           ResourceID_t* rid = FindOrNull(task_resource_map_,
                                          request->task_name());
           if (rid == NULL) {
-            LOG(INFO) << "AddTaskInfo: TASKINFO_REMOVE_FAILED";
             response->set_type(TaskInfoReplyType::TASKINFO_REMOVE_FAILED);
             return Status::OK;
           }
