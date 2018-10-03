@@ -54,6 +54,7 @@ struct CpuMemCostVector_t {
 struct CpuMemResVector_t {
   uint64_t cpu_cores_;
   uint64_t ram_cap_;
+  uint64_t ephemeral_storage_;
 };
 
 struct MinMaxScore_t {

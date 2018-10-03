@@ -21,6 +21,11 @@ message ResourceStats {
   // Network stats in KB
   int64 net_rx_bw = 9;
   int64 net_tx_bw = 10;
+  // Ephemeral Storage
+  int64 ephemeral_storage_allocatable = 11;
+  int64 ephemeral_storage_capacity = 12;
+  double ephemeral_storage_reservation = 13;
+  double ephemeral_storage_utilization = 14;
 }
 
 message CpuStats {
