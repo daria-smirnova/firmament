@@ -351,7 +351,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
         UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
       }
     }
-    RemoveTaskFromLabelsMap(*td_ptr);
     scheduler_->HandleTaskFailure(td_ptr);
     reply->set_type(TaskReplyType::TASK_FAILED_OK);
     return Status::OK;

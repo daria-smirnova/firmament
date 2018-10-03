@@ -1532,7 +1532,7 @@ void CpuCostModel::RemoveMachine(ResourceID_t res_id) {
 
 void CpuCostModel::RemoveTask(TaskID_t task_id) {
   // CHECK_EQ(task_rx_bw_requirement_.erase(task_id), 1);
-  CHECK_EQ(task_resource_requirement_.erase(task_id), 1);
+  task_resource_requirement_.erase(task_id);
 }
 
 EquivClass_t CpuCostModel::GetMachineEC(const string& machine_name,

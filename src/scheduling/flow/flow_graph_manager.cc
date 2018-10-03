@@ -609,7 +609,6 @@ void FlowGraphManager::RemoveTaskHelper(TaskID_t task_id) {
     }
     task_to_running_arc_.erase(task_id);
     RemoveTaskNode(task_node);
-    cost_model_->RemoveTask(task_id);
   }
 }
 
@@ -677,6 +676,7 @@ void FlowGraphManager::TaskFailed(TaskID_t task_id) {
 
 void FlowGraphManager::TaskKilled(TaskID_t task_id) {
   RemoveTaskHelper(task_id);
+  cost_model_->RemoveTask(task_id);
 }
 
 void FlowGraphManager::TaskMigrated(TaskID_t task_id,
@@ -688,6 +688,7 @@ void FlowGraphManager::TaskMigrated(TaskID_t task_id,
 
 void FlowGraphManager::TaskRemoved(TaskID_t task_id) {
   RemoveTaskHelper(task_id);
+  cost_model_->RemoveTask(task_id);
 }
 
 void FlowGraphManager::TaskScheduled(TaskID_t task_id, ResourceID_t res_id) {
