@@ -33,4 +33,7 @@ message TaskStats {
   int64 net_tx_errors = 22;
   double net_tx_errors_rate = 23;
   double net_tx_rate = 24;
+  int64 ephemeral_storage_limit = 25;
+  int64 ephemeral_storage_request = 26;
+  int64 ephemeral_storage_usage = 27;
 }

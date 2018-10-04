@@ -1458,9 +1458,10 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
       CHECK_NOTNULL(ecs_for_machine);
       uint64_t index = 0;
       CpuMemResVector_t cur_resource;
-      uint64_t task_count = rd.num_running_tasks_below();
-      // TODO(pratik) : FLAGS_max_tasks_per_pu is treated as equivalent to
-      // max-pods, as max-pods functionality is not yet merged at this point.
+      uint64_t task_count = rd.num_running_tasks_below() +
+          knowledge_base_->GetResourceNonFirmamentTaskCount(res_id);
+      //TODO(Pratik) : FLAGS_max_tasks_per_pu is treated as equivalent to max-pods,
+      // as max-pods functionality is not yet merged at this point.
       for (cur_resource = *task_resource_request;
            cur_resource.cpu_cores_ <= available_resources.cpu_cores_ &&
            cur_resource.ram_cap_ <= available_resources.ram_cap_ &&

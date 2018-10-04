@@ -176,6 +176,70 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     }
   }
 
+  //TODO: 1)Need to handle the desired return type/value if not void.
+  // 2) Need to call this function from grpc service function after poseidon side
+  // implementation in order to update Non-Firmament related node information.
+  void UpdateNodeInfoForNonFirmamentTask (const ResourceUID* rid_ptr, const TaskStats* task_stats, bool task_added) {
+    ResourceID_t res_id = ResourceIDFromString(rid_ptr->resource_uid());
+    ResourceStatus* rs_ptr = FindPtrOrNull(*resource_map_, res_id);
+    if (rs_ptr == NULL || rs_ptr->mutable_descriptor() == NULL) {
+      return;
+    }
+    if (!task_stats) {
+      return;
+    }
+    TaskID_t task_id = task_stats->task_id();
+    TaskDescriptor* td_ptr = FindPtrOrNull(*task_map_, task_id);
+    if (td_ptr == NULL) {
+      ResourceStats resource_stats;
+      CpuStats* cpu_stats = resource_stats.add_cpus_stats();
+      bool have_sample = knowledge_base_->GetLatestStatsForMachine(
+          res_id, &resource_stats);
+      if (have_sample) {
+        if (task_added) {
+          cpu_stats->set_cpu_allocatable(
+              cpu_stats->cpu_allocatable() -
+              task_stats->cpu_request());
+          resource_stats.set_mem_allocatable(
+              resource_stats.mem_allocatable() -
+              task_stats->mem_request());
+          resource_stats.set_ephemeral_storage_allocatable(
+              resource_stats.ephemeral_storage_allocatable() -
+              task_stats->ephemeral_storage_request());
+          knowledge_base_->UpdateResourceNonFirmamentTaskCount(res_id, true);
+        } else {
+          cpu_stats->set_cpu_allocatable(
+              cpu_stats->cpu_allocatable() +
+              task_stats->cpu_request());
+          resource_stats.set_mem_allocatable(
+              resource_stats.mem_allocatable() +
+              task_stats->mem_request());
+          resource_stats.set_ephemeral_storage_allocatable(
+              resource_stats.ephemeral_storage_allocatable() +
+              task_stats->ephemeral_storage_request());
+          knowledge_base_->UpdateResourceNonFirmamentTaskCount(res_id, false);
+        }
+        double cpu_utilization =
+            (cpu_stats->cpu_capacity() - cpu_stats->cpu_allocatable()) /
+            (double)cpu_stats->cpu_capacity();
+        cpu_stats->set_cpu_utilization(cpu_utilization);
+        double mem_utilization = (resource_stats.mem_capacity() -
+                                  resource_stats.mem_allocatable()) /
+                                 (double)resource_stats.mem_capacity();
+        resource_stats.set_mem_utilization(mem_utilization);
+        double ephemeral_storage_utilization = (resource_stats.ephemeral_storage_capacity() -
+                                  resource_stats.ephemeral_storage_allocatable()) /
+                                 (double)resource_stats.ephemeral_storage_capacity();
+        resource_stats.set_ephemeral_storage_utilization(ephemeral_storage_utilization);
+        knowledge_base_->AddMachineSample(resource_stats);
+      }
+      //reply->set_type(TaskReplyType::NODE_UPDATED_OK);
+      //return Status::OK;
+    } else {
+      LOG(FATAL) << "Task scheduled by Firmament, hence no need to update here";
+    }
+  }
+
   Status Schedule(ServerContext* context, const ScheduleRequest* request,
                   SchedulingDeltas* reply) override {
     boost::lock_guard<boost::recursive_mutex> lock(
