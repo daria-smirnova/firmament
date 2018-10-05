@@ -143,7 +143,9 @@ class FlowGraphManager {
   inline CostModelInterface* cost_model() {
     return cost_model_;
   }
-
+  inline const FlowGraphNode& node_for_node_id(uint64_t node_id) {
+    return graph_change_manager_->Node(node_id);
+  }
  private:
   FRIEND_TEST(DIMACSExporterTest, LargeGraph);
   FRIEND_TEST(DIMACSExporterTest, ScalabilityTestGraphs);

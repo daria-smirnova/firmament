@@ -202,6 +202,17 @@ uint64_t FlowScheduler::ApplySchedulingDeltas(
     ResourceStatus* rs = FindPtrOrNull(*resource_map_, res_id);
     CHECK_NOTNULL(td_ptr);
     CHECK_NOTNULL(rs);
+    JobDescriptor* jd = FindOrNull(*job_map_,
+                                   JobIDFromString(td_ptr->job_id()));
+    CHECK_NOTNULL(jd);
+    if (jd->is_gang_scheduling_job()) {
+      uint64_t scheduled_tasks_count = jd->scheduled_tasks_count();
+      if (scheduled_tasks_count < jd->min_number_of_tasks()) {
+        jd->set_scheduled_tasks_count(--scheduled_tasks_count);
+        delta->set_type(SchedulingDelta::NOOP);
+        continue;
+      }
+    }
     if (delta->type() == SchedulingDelta::NOOP) {
       // We should not get any NOOP deltas as they get filtered before.
       continue;
@@ -745,6 +756,18 @@ uint64_t FlowScheduler::RunSchedulingIteration(
     flow_graph_manager_->NodeBindingToSchedulingDeltas(it->first, it->second,
                                                        &task_bindings_,
                                                        &deltas);
+    const FlowGraphNode& task_node =
+        flow_graph_manager_->node_for_node_id(it->first);
+    CHECK(task_node.IsTaskNode());
+    CHECK_NOTNULL(task_node.td_ptr_);
+    TaskDescriptor* td_ptr = task_node.td_ptr_;
+    JobDescriptor* jd = FindOrNull(*job_map_,
+                                   JobIDFromString(td_ptr->job_id()));
+    CHECK_NOTNULL(jd);
+    if (jd->is_gang_scheduling_job()) {
+      uint64_t scheduled_tasks_count = jd->scheduled_tasks_count();
+      jd->set_scheduled_tasks_count(++scheduled_tasks_count);
+    }
   }
   // Freeing the mappings because they're not used below.
   delete task_mappings;
@@ -779,6 +802,9 @@ uint64_t FlowScheduler::RunSchedulingIteration(
   uint64_t num_scheduled = ApplySchedulingDeltas(deltas);
   if (deltas_output) {
     for (auto& delta : deltas) {
+      if (delta->type() == SchedulingDelta::NOOP) {
+        continue;
+      }
       deltas_output->push_back(*delta);
     }
   }
