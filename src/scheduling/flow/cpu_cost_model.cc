@@ -130,7 +130,9 @@ ArcDescriptor CpuCostModel::ResourceNodeToResourceNode(
 }
 
 ArcDescriptor CpuCostModel::LeafResourceNodeToSink(ResourceID_t resource_id) {
-  return ArcDescriptor(0LL, FLAGS_max_tasks_per_pu, 0ULL);
+  ResourceStatus* rs = FindPtrOrNull(*resource_map_, resource_id);
+  ResourceTopologyNodeDescriptor* rtnd = rs->mutable_topology_node();
+  return ArcDescriptor(0LL, rtnd->resource_desc().num_slots_below(), 0ULL);;
 }
 
 ArcDescriptor CpuCostModel::TaskContinuation(TaskID_t task_id) {
@@ -1458,14 +1460,15 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
       CHECK_NOTNULL(ecs_for_machine);
       uint64_t index = 0;
       CpuMemResVector_t cur_resource;
-      uint64_t task_count = rd.num_running_tasks_below();
-      // TODO(pratik) : FLAGS_max_tasks_per_pu is treated as equivalent to
-      // max-pods, as max-pods functionality is not yet merged at this point.
+      uint64_t task_count = rd.num_running_tasks_below() +
+          knowledge_base_->GetResourceNonFirmamentTaskCount(res_id);
+      //TODO(Pratik) : FLAGS_max_tasks_per_pu is treated as equivalent to max-pods,
+      // as max-pods functionality is not yet merged at this point.
       for (cur_resource = *task_resource_request;
            cur_resource.cpu_cores_ <= available_resources.cpu_cores_ &&
            cur_resource.ram_cap_ <= available_resources.ram_cap_ &&
            cur_resource.ephemeral_storage_ <= available_resources.ephemeral_storage_ &&
-           index < ecs_for_machine->size() && task_count < FLAGS_max_tasks_per_pu;
+           index < ecs_for_machine->size() && task_count < rd.max_pods();
            cur_resource.cpu_cores_ += task_resource_request->cpu_cores_,
           cur_resource.ram_cap_ += task_resource_request->ram_cap_,
           cur_resource.ephemeral_storage_ += task_resource_request->ephemeral_storage_,
@@ -1497,7 +1500,7 @@ void CpuCostModel::AddMachine(ResourceTopologyNodeDescriptor* rtnd_ptr) {
   CHECK(rd.type() == ResourceDescriptor::RESOURCE_MACHINE);
   ResourceID_t res_id = ResourceIDFromString(rd.uuid());
   vector<EquivClass_t> machine_ecs;
-  for (uint64_t index = 0; index < FLAGS_max_multi_arcs_for_cpu; ++index) {
+  for (uint64_t index = 0; index < rd.max_pods(); ++index) {
     EquivClass_t multi_machine_ec = GetMachineEC(rd.friendly_name(), index);
     machine_ecs.push_back(multi_machine_ec);
     CHECK(InsertIfNotPresent(&ec_to_index_, multi_machine_ec, index));
@@ -1576,7 +1579,9 @@ FlowGraphNode* CpuCostModel::GatherStats(FlowGraphNode* accumulator,
       }
       // Running/idle task count
       rd_ptr->set_num_running_tasks_below(rd_ptr->current_running_tasks_size());
-      rd_ptr->set_num_slots_below(FLAGS_max_tasks_per_pu);
+      ResourceStatus* m_rs = FindPtrOrNull(*resource_map_, machine_res_id);
+      ResourceTopologyNodeDescriptor* m_rtnd = m_rs->mutable_topology_node();
+      rd_ptr->set_num_slots_below(m_rtnd->resource_desc().max_pods());
       return accumulator;
     }
   } else if (accumulator->type_ == FlowNodeType::MACHINE) {
