@@ -80,6 +80,8 @@ EventDrivenScheduler::EventDrivenScheduler(
       time_manager_(time_manager),
       trace_generator_(trace_generator) {
   VLOG(1) << "EventDrivenScheduler initiated.";
+  one_task_runnable = false;
+  queue_based_schedule = false;
 }
 
 EventDrivenScheduler::~EventDrivenScheduler() {

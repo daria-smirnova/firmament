@@ -140,12 +140,20 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
         resource_stats.set_mem_allocatable(
             resource_stats.mem_allocatable() +
             td_ptr->resource_request().ram_cap());
+        // ephemeral storage
+        resource_stats.set_ephemeral_storage_allocatable(
+            resource_stats.ephemeral_storage_allocatable() +
+            td_ptr->resource_request().ephemeral_storage());
       } else {
         cpu_stats->set_cpu_allocatable(cpu_stats->cpu_allocatable() -
                                        td_ptr->resource_request().cpu_cores());
         resource_stats.set_mem_allocatable(
             resource_stats.mem_allocatable() -
             td_ptr->resource_request().ram_cap());
+        // ephemeral storage
+        resource_stats.set_ephemeral_storage_allocatable(
+            resource_stats.ephemeral_storage_allocatable() -
+            td_ptr->resource_request().ephemeral_storage());
       }
       double cpu_utilization =
           (cpu_stats->cpu_capacity() - cpu_stats->cpu_allocatable()) /
@@ -155,6 +163,10 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
           (resource_stats.mem_capacity() - resource_stats.mem_allocatable()) /
           (double)resource_stats.mem_capacity();
       resource_stats.set_mem_utilization(mem_utilization);
+      double ephemeral_storage_utilization =
+          (resource_stats.ephemeral_storage_capacity() - resource_stats.ephemeral_storage_allocatable()) /
+          (double)resource_stats.ephemeral_storage_capacity();
+      resource_stats.set_ephemeral_storage_utilization(ephemeral_storage_utilization);
       knowledge_base_->AddMachineSample(resource_stats);
     }
   }
@@ -204,7 +216,7 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     for (const auto& label : td.labels()) {
       unordered_map<string, vector<TaskID_t>>* label_values =
           FindOrNull(labels_map_, label.key());
-      if (!label_values) {
+      if (label_values) {
         vector<TaskID_t>* labels_map_tasks =
             FindOrNull(*label_values, label.value());
         if (labels_map_tasks) {
@@ -280,7 +292,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
         UpdateMachineSamplesToKnowledgeBaseStatically(td_ptr, true);
       }
     }
-    RemoveTaskFromLabelsMap(*td_ptr);
     scheduler_->HandleTaskFailure(td_ptr);
     reply->set_type(TaskReplyType::TASK_FAILED_OK);
     return Status::OK;
@@ -386,6 +397,9 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
                                task_desc_ptr->job_descriptor()));
       jd_ptr = FindOrNull(*job_map_, job_id);
       TaskDescriptor* root_td_ptr = jd_ptr->mutable_root_task();
+      // Task that comes first is made as root task of the job.
+      // Root task that was set in poseidon is ignored.
+      root_td_ptr->CopyFrom(task_desc_ptr->task_descriptor());
       CHECK(
           InsertIfNotPresent(task_map_.get(), root_td_ptr->uid(), root_td_ptr));
       root_td_ptr->set_submit_time(wall_time_.GetCurrentTimestamp());
@@ -511,6 +525,11 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       resource_stats.set_disk_bw(0);
       resource_stats.set_net_rx_bw(0);
       resource_stats.set_net_tx_bw(0);
+      // ephemeral storage
+      resource_stats.set_ephemeral_storage_capacity(
+          rtnd_ptr->resource_desc().resource_capacity().ephemeral_storage());
+      resource_stats.set_ephemeral_storage_utilization(0.1);
+      resource_stats.set_ephemeral_storage_allocatable(resource_stats.ephemeral_storage_capacity() * 0.9);
       knowledge_base_->AddMachineSample(resource_stats);
     }
     return Status::OK;
