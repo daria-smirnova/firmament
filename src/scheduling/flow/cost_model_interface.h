@@ -248,6 +248,20 @@ class CostModelInterface {
     return delta;
   }
 
+  /**
+   * Clear unscheduled tasks related maps and sets.
+   */
+  virtual void ClearUnscheduledTasksData() {
+  }
+
+  /**
+   * Get all task ids which are connected to task EC, in turn task EC
+   * is not connected to any of the machine ecs. i.e get unscheduled
+   * tasks.
+   */
+  virtual void GetUnscheduledTasks(vector<uint64_t>* unscheduled_tasks_ptr) {
+  }
+
  protected:
   shared_ptr<FlowGraphManager> flow_graph_manager_;
 };

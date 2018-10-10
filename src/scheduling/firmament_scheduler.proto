@@ -36,6 +36,9 @@ message ScheduleRequest {}
 
 message SchedulingDeltas {
   repeated SchedulingDelta deltas = 1;
+  // Added support for events. Added field to collect
+  // unscheduled tasks in a scheduling round.
+  repeated uint64 unscheduled_tasks = 2;
 }
 
 message TaskCompletedResponse {

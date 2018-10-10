@@ -33,6 +33,7 @@
 DEFINE_uint64(max_multi_arcs_for_cpu, 50, "Maximum number of multi-arcs.");
 
 DECLARE_uint64(max_tasks_per_pu);
+DECLARE_bool(gather_unscheduled_tasks);
 DECLARE_bool(pod_affinity_antiaffinity_symmetry);
 
 namespace firmament {
@@ -64,7 +65,22 @@ void CpuCostModel::AccumulateResourceStats(ResourceDescriptor* accumulator,
                                    other->num_slots_below());
 }
 
-pair<TaskID_t, ResourceID_t> CpuCostModel::GetTaskMappingForSingleTask(TaskID_t task_id) {
+// Events support for firmament.
+void CpuCostModel::ClearUnscheduledTasksData() {
+  // Clear all map and sets related to unscheduled tasks.
+  task_ec_to_connected_tasks_.clear();
+  task_ec_to_connected_tasks_set_.clear();
+  task_ec_with_no_pref_arcs_.clear();
+  task_ec_with_no_pref_arcs_set_.clear();
+}
+
+// Events support for firmament.
+vector<uint64_t>* CpuCostModel::GetTasksConnectedToTaskEC(EquivClass_t ec) {
+  return &task_ec_to_connected_tasks_[ec];
+}
+
+pair<TaskID_t, ResourceID_t> CpuCostModel::GetTaskMappingForSingleTask(
+    TaskID_t task_id) {
   // This function returns best matching resource for given taskid.
   vector<EquivClass_t>* ecs = GetTaskEquivClasses(task_id);
   pair<TaskID_t, ResourceID_t> delta;
@@ -80,6 +96,19 @@ pair<TaskID_t, ResourceID_t> CpuCostModel::GetTaskMappingForSingleTask(TaskID_t 
 #endif
   }
   return delta;
+}
+
+// Events support for firmament.
+void CpuCostModel::GetUnscheduledTasks(
+    vector<uint64_t>* unscheduled_tasks_ptr) {
+  // Return all tasks that are connected to task EC, where task EC has zero
+  // outgoing preferred arcs to machine ecs.
+  for (auto& ec : task_ec_with_no_pref_arcs_) {
+    vector<uint64_t>* tasks_connected_to_ec = GetTasksConnectedToTaskEC(ec);
+    unscheduled_tasks_ptr->insert(std::end(*unscheduled_tasks_ptr),
+                                  std::begin(*tasks_connected_to_ec),
+                                  std::end(*tasks_connected_to_ec));
+  }
 }
 
 ArcDescriptor CpuCostModel::TaskToUnscheduledAgg(TaskID_t task_id) {
@@ -267,46 +296,44 @@ ArcDescriptor CpuCostModel::EquivClassToEquivClass(EquivClass_t ec1,
       pod_affinity_normalized_score = pod_affinity_score.final_score;
     }
   }
-  //Expressing taints/tolerations priority scores
-    unordered_map<ResourceID_t, PriorityScoresList_t,
-                    boost::hash<boost::uuids::uuid>>*
-          taints_priority_scores_ptr =
-              FindOrNull(ec_to_node_priority_scores, ec1);
-      CHECK_NOTNULL(taints_priority_scores_ptr);
-      PriorityScoresList_t* priority_scores_struct_ptr =
-          FindOrNull(*taints_priority_scores_ptr, *machine_res_id);
-      CHECK_NOTNULL(priority_scores_struct_ptr);
-      PriorityScore_t& taints_score =
-          priority_scores_struct_ptr->intolerable_taints_priority;
-      if (taints_score.satisfy) {
-        MinMaxScores_t* max_min_priority_scores =
-            FindOrNull(ec_to_max_min_priority_scores, ec1);
-        CHECK_NOTNULL(max_min_priority_scores);
-        if (taints_score.final_score == -1) {
-          // Normalised taints score is not calculated for this
-          // machine, so calculate and store it once.
-          int64_t max_score =
-              max_min_priority_scores->intolerable_taints_priority.max_score;
-          if (max_score) {
-            taints_score.final_score =  (taints_score.score / (float)(max_score)) * omega_;
-          }
-        }
-      }else{
+  // Expressing taints/tolerations priority scores
+  unordered_map<ResourceID_t, PriorityScoresList_t,
+                boost::hash<boost::uuids::uuid>>* taints_priority_scores_ptr =
+      FindOrNull(ec_to_node_priority_scores, ec1);
+  CHECK_NOTNULL(taints_priority_scores_ptr);
+  PriorityScoresList_t* priority_scores_struct_ptr =
+      FindOrNull(*taints_priority_scores_ptr, *machine_res_id);
+  CHECK_NOTNULL(priority_scores_struct_ptr);
+  PriorityScore_t& taints_score =
+      priority_scores_struct_ptr->intolerable_taints_priority;
+  if (taints_score.satisfy) {
+    MinMaxScores_t* max_min_priority_scores =
+        FindOrNull(ec_to_max_min_priority_scores, ec1);
+    CHECK_NOTNULL(max_min_priority_scores);
+    if (taints_score.final_score == -1) {
+      // Normalised taints score is not calculated for this
+      // machine, so calculate and store it once.
+      int64_t max_score =
+          max_min_priority_scores->intolerable_taints_priority.max_score;
+      if (max_score) {
+        taints_score.final_score =
+            (taints_score.score / (float)(max_score)) * omega_;
+      }
+    }
+  } else {
+    taints_score.final_score = 0;
+  }
 
-	taints_score.final_score = 0;
-     }
-  
   cost_vector.node_affinity_soft_cost_ =
       omega_ - node_affinity_normalized_score;
   cost_vector.pod_affinity_soft_cost_ = omega_ - pod_affinity_normalized_score;
   cost_vector.intolerable_taints_cost_ = taints_score.final_score;
-  
-	
+
   Cost_t final_cost = FlattenCostVector(cost_vector);
-  //Added for solver
+  // Added for solver
   if (pod_affinity_or_anti_affinity_task) {
-    ResourceID_t current_resource_id =
-      ResourceIDFromString(rs->topology_node().children(0).resource_desc().uuid());
+    ResourceID_t current_resource_id = ResourceIDFromString(
+        rs->topology_node().children(0).resource_desc().uuid());
     ResourceID_t* res_id = FindOrNull(ec_to_best_fit_resource_, ec1);
     if (!res_id) {
       ec_to_min_cost_[ec1] = final_cost;
@@ -415,7 +442,8 @@ vector<EquivClass_t>* CpuCostModel::GetTaskEquivClasses(TaskID_t task_id) {
   CHECK_NOTNULL(task_resource_request);
   size_t task_agg = 0;
   bool pod_antiaffinity_symmetry = false;
-  if (td_ptr->has_affinity() || (td_ptr->tolerations_size() > DEFAULT_TOLERATIONS)) {
+  if (td_ptr->has_affinity() ||
+      (td_ptr->tolerations_size() > DEFAULT_TOLERATIONS)) {
     // For tasks which has affinity requirements, we hash the job id.
     // TODO(jagadish): This hash has to be handled in an efficient way in
     // future.
@@ -452,6 +480,31 @@ vector<EquivClass_t>* CpuCostModel::GetTaskEquivClasses(TaskID_t task_id) {
   InsertIfNotPresent(&ec_to_td_requirements, resource_request_ec, *td_ptr);
   if (pod_antiaffinity_symmetry) {
     ecs_with_pod_antiaffinity_symmetry_.insert(resource_request_ec);
+  }
+  if (FLAGS_gather_unscheduled_tasks) {
+    // When preemption is enabled, there is a chance that task can be in
+    // 'RUNNING' state. Skip such tasks. You may need to revisit this code once
+    // preemption code is completed.
+    if (td_ptr->state() != TaskDescriptor::RUNNING) {
+      auto it = task_ec_to_connected_tasks_.find(resource_request_ec);
+      // Make sure we store unique unscheduled task entries.
+      if (it != task_ec_to_connected_tasks_.end()) {
+        unordered_set<uint64_t>& connected_tasks_set =
+            task_ec_to_connected_tasks_set_[resource_request_ec];
+        if (connected_tasks_set.find(task_id) == connected_tasks_set.end()) {
+          it->second.push_back(task_id);
+          connected_tasks_set.insert(task_id);
+        }
+      } else {
+        vector<uint64_t> connected_tasks;
+        unordered_set<uint64_t> connected_tasks_set;
+        connected_tasks.push_back(task_id);
+        task_ec_to_connected_tasks_[resource_request_ec] = connected_tasks;
+        connected_tasks_set.insert(task_id);
+        task_ec_to_connected_tasks_set_[resource_request_ec] =
+            connected_tasks_set;
+      }
+    }
   }
   return ecs;
 }
@@ -563,122 +616,114 @@ void CpuCostModel::CalculatePrioritiesCost(const EquivClass_t ec,
   }
 }
 
-
-//Taints and Tolerations
+// Taints and Tolerations
 void CpuCostModel::CalculateIntolerableTaintsCost(const ResourceDescriptor& rd,
-                                            const TaskDescriptor* td_ptr,
-                                            const EquivClass_t ec ){
- bool IsTolerable = false;
- int64_t intolerable_taint_cost = 0;
- for (const auto& tolerations: td_ptr->tolerations()) {
-         if (tolerations.effect() == "PreferNoSchedule" || tolerations.effect() == ""){
-                if(tolerations.operator_() == "Exists"){
-                               if (tolerations.key() != ""){
-                                       InsertIfNotPresent(&tolerationSoftExistsMap,tolerations.key(),tolerations.value());
-                               }else{
-                                       IsTolerable = true;
-                               }
-
-                        }
-               else if ((tolerations.operator_() == "Equal") || (tolerations.operator_() == "")){
-
-                               InsertIfNotPresent(&tolerationSoftEqualMap,tolerations.key(),tolerations.value());
-
-                        }
-               else{
-                               LOG(FATAL) << "Unsupported operator :" << tolerations.operator_();
-                               break;
-                        }
-
-                }
-
-         }
-
-  if (!IsTolerable){
-       for (const auto& taint : rd.taints()){
-       if (taint.effect() == "PreferNoSchedule"){
-               //If the key does not exist in Exists Map, look for Equal Map for any matching key and value
-
-               if (!ContainsKey(tolerationSoftExistsMap,taint.key())){
-                       const string* value = FindOrNull(tolerationSoftEqualMap, taint.key());
-
-                       //If key is found, then value is not NULL
-                        if (value != NULL) {
-                                //Check if the value matches for the found key
-                                       if ((*value) != taint.value()) {
-                                         intolerable_taint_cost = intolerable_taint_cost + 1;
-                                       }
-                        }else{ //If the key is not found, then taint is not tolerable
-                                       intolerable_taint_cost = intolerable_taint_cost + 1;
-                         }
-
-                       }
-
-               }
-       }
-  }
-     // Fill the intolerable taints priority min, max and actual scores which will
-        // be used in cost calculation.
-        unordered_map<ResourceID_t, PriorityScoresList_t,
-                      boost::hash<boost::uuids::uuid>>*
-            taints_priority_scores_ptr =
-                FindOrNull(ec_to_node_priority_scores, ec);
-        if (!taints_priority_scores_ptr) {
-          // For this EC, no node to priority scores map exists, so initialize
-          // it.
-          unordered_map<ResourceID_t, PriorityScoresList_t,
-                        boost::hash<boost::uuids::uuid>>
-              node_to_priority_scores_map;
-          InsertIfNotPresent(&ec_to_node_priority_scores, ec,
-                             node_to_priority_scores_map);
-          taints_priority_scores_ptr =
-              FindOrNull(ec_to_node_priority_scores, ec);
+                                                  const TaskDescriptor* td_ptr,
+                                                  const EquivClass_t ec) {
+  bool IsTolerable = false;
+  int64_t intolerable_taint_cost = 0;
+  for (const auto& tolerations : td_ptr->tolerations()) {
+    if (tolerations.effect() == "PreferNoSchedule" ||
+        tolerations.effect() == "") {
+      if (tolerations.operator_() == "Exists") {
+        if (tolerations.key() != "") {
+          InsertIfNotPresent(&tolerationSoftExistsMap, tolerations.key(),
+                             tolerations.value());
+        } else {
+          IsTolerable = true;
         }
-        CHECK_NOTNULL(taints_priority_scores_ptr);
-        ResourceID_t res_id = ResourceIDFromString(rd.uuid());
-        PriorityScoresList_t* priority_scores_struct_ptr =
-            FindOrNull(*taints_priority_scores_ptr, res_id);
-        if (!priority_scores_struct_ptr) {
-          // Priority scores is empty for this node, so initialize it zero.
-          PriorityScoresList_t priority_scores_list;
-          InsertIfNotPresent(taints_priority_scores_ptr, res_id,
-                             priority_scores_list);
-          priority_scores_struct_ptr =
-              FindOrNull(*taints_priority_scores_ptr, res_id);
-        }
-        CHECK_NOTNULL(priority_scores_struct_ptr);
-        // Store the intolerable taints min, max and actual priority scores that will
-        // be utilized in calculating normalized cost.
-        PriorityScore_t& taints_score =
-            priority_scores_struct_ptr->intolerable_taints_priority;
-        if (!intolerable_taint_cost) {
-          // If machine does not satisfies soft constraint then we flag machine
-          // such that cost of omega_ is used in cost calculation.
-          taints_score.satisfy = false;
-        }
-        if (taints_score.satisfy) {
-          // Machine satisfies soft constraints.
-          // Store the intolerable taints min, max and actual priority scores.
-          taints_score.score = intolerable_taint_cost;
-          MinMaxScores_t* max_min_priority_scores =
-              FindOrNull(ec_to_max_min_priority_scores, ec);
-          if (!max_min_priority_scores) {
-            MinMaxScores_t priority_scores_list;
-            InsertIfNotPresent(&ec_to_max_min_priority_scores, ec,
-                               priority_scores_list);
-            max_min_priority_scores =
-                FindOrNull(ec_to_max_min_priority_scores, ec);
-          }
-          MinMaxScore_t& min_max_taints_score =
-              max_min_priority_scores->intolerable_taints_priority;
-          if (min_max_taints_score.max_score < intolerable_taint_cost ||
-              min_max_taints_score.max_score == -1) {
-            min_max_taints_score.max_score = intolerable_taint_cost;
-          }
-		}
+
+      } else if ((tolerations.operator_() == "Equal") ||
+                 (tolerations.operator_() == "")) {
+        InsertIfNotPresent(&tolerationSoftEqualMap, tolerations.key(),
+                           tolerations.value());
+
+      } else {
+        LOG(FATAL) << "Unsupported operator :" << tolerations.operator_();
+        break;
       }
+    }
+  }
 
+  if (!IsTolerable) {
+    for (const auto& taint : rd.taints()) {
+      if (taint.effect() == "PreferNoSchedule") {
+        // If the key does not exist in Exists Map, look for Equal Map for any
+        // matching key and value
 
+        if (!ContainsKey(tolerationSoftExistsMap, taint.key())) {
+          const string* value = FindOrNull(tolerationSoftEqualMap, taint.key());
+
+          // If key is found, then value is not NULL
+          if (value != NULL) {
+            // Check if the value matches for the found key
+            if ((*value) != taint.value()) {
+              intolerable_taint_cost = intolerable_taint_cost + 1;
+            }
+          } else {  // If the key is not found, then taint is not tolerable
+            intolerable_taint_cost = intolerable_taint_cost + 1;
+          }
+        }
+      }
+    }
+  }
+  // Fill the intolerable taints priority min, max and actual scores which will
+  // be used in cost calculation.
+  unordered_map<ResourceID_t, PriorityScoresList_t,
+                boost::hash<boost::uuids::uuid>>* taints_priority_scores_ptr =
+      FindOrNull(ec_to_node_priority_scores, ec);
+  if (!taints_priority_scores_ptr) {
+    // For this EC, no node to priority scores map exists, so initialize
+    // it.
+    unordered_map<ResourceID_t, PriorityScoresList_t,
+                  boost::hash<boost::uuids::uuid>>
+        node_to_priority_scores_map;
+    InsertIfNotPresent(&ec_to_node_priority_scores, ec,
+                       node_to_priority_scores_map);
+    taints_priority_scores_ptr = FindOrNull(ec_to_node_priority_scores, ec);
+  }
+  CHECK_NOTNULL(taints_priority_scores_ptr);
+  ResourceID_t res_id = ResourceIDFromString(rd.uuid());
+  PriorityScoresList_t* priority_scores_struct_ptr =
+      FindOrNull(*taints_priority_scores_ptr, res_id);
+  if (!priority_scores_struct_ptr) {
+    // Priority scores is empty for this node, so initialize it zero.
+    PriorityScoresList_t priority_scores_list;
+    InsertIfNotPresent(taints_priority_scores_ptr, res_id,
+                       priority_scores_list);
+    priority_scores_struct_ptr =
+        FindOrNull(*taints_priority_scores_ptr, res_id);
+  }
+  CHECK_NOTNULL(priority_scores_struct_ptr);
+  // Store the intolerable taints min, max and actual priority scores that will
+  // be utilized in calculating normalized cost.
+  PriorityScore_t& taints_score =
+      priority_scores_struct_ptr->intolerable_taints_priority;
+  if (!intolerable_taint_cost) {
+    // If machine does not satisfies soft constraint then we flag machine
+    // such that cost of omega_ is used in cost calculation.
+    taints_score.satisfy = false;
+  }
+  if (taints_score.satisfy) {
+    // Machine satisfies soft constraints.
+    // Store the intolerable taints min, max and actual priority scores.
+    taints_score.score = intolerable_taint_cost;
+    MinMaxScores_t* max_min_priority_scores =
+        FindOrNull(ec_to_max_min_priority_scores, ec);
+    if (!max_min_priority_scores) {
+      MinMaxScores_t priority_scores_list;
+      InsertIfNotPresent(&ec_to_max_min_priority_scores, ec,
+                         priority_scores_list);
+      max_min_priority_scores = FindOrNull(ec_to_max_min_priority_scores, ec);
+    }
+    MinMaxScore_t& min_max_taints_score =
+        max_min_priority_scores->intolerable_taints_priority;
+    if (min_max_taints_score.max_score < intolerable_taint_cost ||
+        min_max_taints_score.max_score == -1) {
+      min_max_taints_score.max_score = intolerable_taint_cost;
+    }
+  }
+}
 
 // Pod affinity/anti-affinity
 bool CpuCostModel::MatchExpressionWithPodLabels(
@@ -880,7 +925,7 @@ bool CpuCostModel::SatisfiesPodAntiAffinityTerm(
         return false;
     }
   }
-   namespaces.clear();
+  namespaces.clear();
   return true;
 }
 
@@ -1030,7 +1075,6 @@ int64_t CpuCostModel::CalculatePodAntiAffinitySymmetryPreference(
   return sum_of_weights;
 }
 
-
 // Soft constraint check for pod affinity/anti-affinity.
 void CpuCostModel::CalculatePodAffinityAntiAffinityPreference(
     const ResourceDescriptor& rd, const TaskDescriptor& td,
@@ -1116,10 +1160,8 @@ void CpuCostModel::CalculatePodAffinityAntiAffinityPreference(
       FindOrNull(*nodes_priority_scores_ptr, res_id);
   if (!priority_scores_struct_ptr) {
     PriorityScoresList_t priority_scores_list;
-    InsertIfNotPresent(nodes_priority_scores_ptr, res_id,
-                       priority_scores_list);
-    priority_scores_struct_ptr =
-        FindOrNull(*nodes_priority_scores_ptr, res_id);
+    InsertIfNotPresent(nodes_priority_scores_ptr, res_id, priority_scores_list);
+    priority_scores_struct_ptr = FindOrNull(*nodes_priority_scores_ptr, res_id);
   }
   CHECK_NOTNULL(priority_scores_struct_ptr);
   PriorityScore_t& pod_affinity_score =
@@ -1360,9 +1402,9 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
     // scores. But we are not clearing it just after scheduling round completed,
     // we are clearing in the subsequent scheduling round, need to improve this.
     ec_to_node_priority_scores.clear();
-	//Added to clear the map before filling the values for each node
-	tolerationSoftEqualMap.clear();
-	tolerationSoftExistsMap.clear();
+    // Added to clear the map before filling the values for each node
+    tolerationSoftEqualMap.clear();
+    tolerationSoftExistsMap.clear();
     for (auto& ec_machines : ecs_for_machines_) {
       ResourceStatus* rs = FindPtrOrNull(*resource_map_, ec_machines.first);
       CHECK_NOTNULL(rs);
@@ -1381,19 +1423,22 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
         } else {
           continue;
         }
-		//Check whether taints in the machine has matching tolerations
-		if (scheduler::HasMatchingTolerationforNodeTaints(rd, *td_ptr)) {
-		  CalculateIntolerableTaintsCost(rd, td_ptr, ec);
-		}else {
-                 continue;
+        // Check whether taints in the machine has matching tolerations
+        if (scheduler::HasMatchingTolerationforNodeTaints(rd, *td_ptr)) {
+          CalculateIntolerableTaintsCost(rd, td_ptr, ec);
+        } else {
+          continue;
         }
-		// Checking costs for intolerable taints
-		
+        // Checking costs for intolerable taints
+
         // Checking pod anti-affinity symmetry
-        if (FLAGS_pod_affinity_antiaffinity_symmetry && (ecs_with_pod_antiaffinity_symmetry_.find(ec) != ecs_with_pod_antiaffinity_symmetry_.end())) {
+        if (FLAGS_pod_affinity_antiaffinity_symmetry &&
+            (ecs_with_pod_antiaffinity_symmetry_.find(ec) !=
+             ecs_with_pod_antiaffinity_symmetry_.end())) {
           if (td_ptr->labels_size()) {
-            if (SatisfiesPodAntiAffinitySymmetry(ResourceIDFromString(rd.uuid()), *td_ptr)) {
-              //Calculate soft constriants score if needed.
+            if (SatisfiesPodAntiAffinitySymmetry(
+                    ResourceIDFromString(rd.uuid()), *td_ptr)) {
+              // Calculate soft constriants score if needed.
             } else {
               continue;
             }
@@ -1414,8 +1459,8 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
       uint64_t index = 0;
       CpuMemResVector_t cur_resource;
       uint64_t task_count = rd.num_running_tasks_below();
-      //TODO(dujun) : FLAGS_max_tasks_per_pu is treated as equivalent to max-pods,
-      // as max-pods functionality is not yet merged at this point.
+      // TODO(pratik) : FLAGS_max_tasks_per_pu is treated as equivalent to
+      // max-pods, as max-pods functionality is not yet merged at this point.
       for (cur_resource = *task_resource_request;
            cur_resource.cpu_cores_ <= available_resources.cpu_cores_ &&
            cur_resource.ram_cap_ <= available_resources.ram_cap_ &&
@@ -1426,6 +1471,19 @@ vector<EquivClass_t>* CpuCostModel::GetEquivClassToEquivClassesArcs(
           cur_resource.ephemeral_storage_ += task_resource_request->ephemeral_storage_,
           index++, task_count++) {
         pref_ecs->push_back(ec_machines.second[index]);
+      }
+    }
+    if (FLAGS_gather_unscheduled_tasks) {
+      if (pref_ecs->size() == 0) {
+        // So tasks connected to this task EC will never be scheduled, so populate
+        // this 'ec' to 'task_ec_with_no_pref_arcs_'. Reason why tasks not
+        // scheduled could be 1) Not enough cpu/mem 2) Any nodes not satisfying
+        // scheduling constraints like affinity etc.
+        if (task_ec_with_no_pref_arcs_set_.find(ec) ==
+            task_ec_with_no_pref_arcs_set_.end()) {
+          task_ec_with_no_pref_arcs_.push_back(ec);
+          task_ec_with_no_pref_arcs_set_.insert(ec);
+        }
       }
     }
   }
