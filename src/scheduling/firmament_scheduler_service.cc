@@ -176,88 +176,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     }
   }
 
-  // Update Non-Firmament related node information.
-  void UpdateStatsToKnowledgeBase(ResourceStats* resource_stats,
-                                    CpuStats* cpu_stats) {
-    double cpu_utilization =
-        (cpu_stats->cpu_capacity() - cpu_stats->cpu_allocatable()) /
-        (double)cpu_stats->cpu_capacity();
-    cpu_stats->set_cpu_utilization(cpu_utilization);
-    double mem_utilization = (resource_stats->mem_capacity() -
-        resource_stats->mem_allocatable()) /
-        (double)resource_stats->mem_capacity();
-    resource_stats->set_mem_utilization(mem_utilization);
-    double ephemeral_storage_utilization = (resource_stats->ephemeral_storage_capacity() -
-        resource_stats->ephemeral_storage_allocatable()) /
-        (double)resource_stats->ephemeral_storage_capacity();
-    resource_stats->set_ephemeral_storage_utilization(ephemeral_storage_utilization);
-    knowledge_base_->AddMachineSample(*resource_stats);
-  }
-
-  Status AddTaskInfo (ServerContext* context, const TaskInfo* request,
-                      TaskInfoResponse* response) override {
-    //boost::lock_guard<boost::recursive_mutex> lock(
-      //  scheduler_->scheduling_lock_);
-    ResourceID_t res_id = ResourceIDFromString(request->resource_id());
-    ResourceStatus* rs_ptr = FindPtrOrNull(*resource_map_, res_id);
-    if (rs_ptr == NULL || rs_ptr->mutable_descriptor() == NULL) {
-      response->set_type(TaskInfoReplyType::TASKINFO_SUBMIT_FAILED);
-      return Status::OK;
-    }
-    ResourceStats resource_stats;
-    CpuStats* cpu_stats = resource_stats.add_cpus_stats();
-    bool have_sample = knowledge_base_->GetLatestStatsForMachine(
-        res_id, &resource_stats);
-    if (have_sample) {
-      switch (request->type()) {
-        case TaskInfoType::TASKINFO_ADD: {
-          if (!InsertIfNotPresent(&task_resource_map_,
-                                   request->task_name(), res_id)) {
-            response->set_type(TaskInfoReplyType::TASKINFO_SUBMIT_FAILED);
-            return Status::OK;
-          }
-          cpu_stats->set_cpu_allocatable(
-              cpu_stats->cpu_allocatable() -
-              request->cpu_utilization());
-          resource_stats.set_mem_allocatable(
-              resource_stats.mem_allocatable() -
-              request->mem_utilization());
-          resource_stats.set_ephemeral_storage_allocatable(
-              resource_stats.ephemeral_storage_allocatable() -
-              request->ephemeral_storage_utilization());
-          knowledge_base_->UpdateResourceNonFirmamentTaskCount(res_id, true);
-          UpdateStatsToKnowledgeBase(&resource_stats, cpu_stats);
-          response->set_type(TaskInfoReplyType::TASKINFO_SUBMITTED_OK);
-          return Status::OK;
-        }
-        case TaskInfoType::TASKINFO_REMOVE: {
-          ResourceID_t* rid = FindOrNull(task_resource_map_,
-                                         request->task_name());
-          if (rid == NULL) {
-            response->set_type(TaskInfoReplyType::TASKINFO_REMOVE_FAILED);
-            return Status::OK;
-          }
-          cpu_stats->set_cpu_allocatable(
-              cpu_stats->cpu_allocatable() +
-              request->cpu_utilization());
-          resource_stats.set_mem_allocatable(
-              resource_stats.mem_allocatable() +
-              request->mem_utilization());
-          resource_stats.set_ephemeral_storage_allocatable(
-              resource_stats.ephemeral_storage_allocatable() +
-              request->ephemeral_storage_utilization());
-          knowledge_base_->UpdateResourceNonFirmamentTaskCount(res_id, false);
-          UpdateStatsToKnowledgeBase(&resource_stats, cpu_stats);
-          response->set_type(TaskInfoReplyType::TASKINFO_REMOVED_OK);
-          return Status::OK;
-        }
-        default:
-          LOG(FATAL) << "Unsupported request type: " << request->type();
-      }
-    }
-    return Status::OK;
-  }
-
   Status Schedule(ServerContext* context, const ScheduleRequest* request,
                   SchedulingDeltas* reply) override {
     boost::lock_guard<boost::recursive_mutex> lock(
@@ -805,7 +723,6 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
   // Pod affinity/anti-affinity
   unordered_map<string, unordered_map<string, vector<TaskID_t>>> labels_map_;
   vector<TaskID_t> affinity_antiaffinity_tasks_;
-  unordered_map<string, ResourceID_t> task_resource_map_;
 
   ResourceStatus* CreateTopLevelResource() {
     ResourceID_t res_id = GenerateResourceID();
