@@ -65,8 +65,6 @@ class KnowledgeBase {
   void LoadKnowledgeBaseFromFile();
   void ProcessTaskFinalReport(const vector<EquivClass_t>& equiv_classes,
                               const TaskFinalReport& report);
-  void UpdateResourceNonFirmamentTaskCount(ResourceID_t res_id, bool add);
-  uint64_t GetResourceNonFirmamentTaskCount(ResourceID_t res_id);
   inline const DataLayerManagerInterface& data_layer_manager() {
     CHECK_NOTNULL(data_layer_manager_);
     return *data_layer_manager_;
@@ -84,8 +82,6 @@ class KnowledgeBase {
   unordered_map<TaskID_t, deque<TaskStats> > task_map_;
   unordered_map<TaskID_t, deque<TaskFinalReport> > task_exec_reports_;
   boost::upgrade_mutex kb_lock_;
-  unordered_map<ResourceID_t, uint64_t,
-      boost::hash<boost::uuids::uuid>> resource_tasks_count_;
 
  private:
   fstream serial_machine_samples_;

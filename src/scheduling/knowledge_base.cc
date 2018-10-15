@@ -343,30 +343,4 @@ void KnowledgeBase::ProcessTaskFinalReport(
   }
 }
 
-void KnowledgeBase::UpdateResourceNonFirmamentTaskCount(ResourceID_t res_id, bool add) {
-  uint64_t* tasks_count = FindOrNull(resource_tasks_count_, res_id);
-  if (tasks_count) {
-      if (add) {
-        (*tasks_count)++;
-      } else {
-        if (*tasks_count > 0) {
-          (*tasks_count)--;
-        }
-      }
-  } else {
-    if (add) {
-      CHECK(InsertOrUpdate(&resource_tasks_count_, res_id, 1));
-    }
-  }
-}
-
-uint64_t KnowledgeBase::GetResourceNonFirmamentTaskCount(ResourceID_t res_id) {
-  uint64_t* tasks_count = FindOrNull(resource_tasks_count_, res_id);
-  if (tasks_count) {
-    return *tasks_count;
-  } else {
-    return 0;
-  }
-}
-
 }  // namespace firmament
