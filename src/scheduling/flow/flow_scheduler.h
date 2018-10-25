@@ -93,6 +93,12 @@ class FlowScheduler : public EventDrivenScheduler {
   virtual uint64_t ScheduleAllJobs(SchedulerStats* scheduler_stats);
   virtual uint64_t ScheduleAllQueueJobs(SchedulerStats* scheduler_stats,
                                         vector<SchedulingDelta>* deltas);
+  virtual void UpdateGangSchedulingDeltas(
+                     SchedulerStats* scheduler_stats,
+                     vector<SchedulingDelta>* deltas_output,
+                     vector<uint64_t>* unscheduled_normal_tasks,
+                     unordered_set<uint64_t>* unscheduled_affinity_tasks_set,
+                     vector<uint64_t>* unscheduled_affinity_tasks);
   virtual uint64_t ScheduleAllJobs(SchedulerStats* scheduler_stats,
                                    vector<SchedulingDelta>* deltas);
   virtual uint64_t ScheduleJob(JobDescriptor* jd_ptr,

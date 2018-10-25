@@ -206,11 +206,35 @@ uint64_t FlowScheduler::ApplySchedulingDeltas(
                                    JobIDFromString(td_ptr->job_id()));
     CHECK_NOTNULL(jd);
     if (jd->is_gang_scheduling_job()) {
-      uint64_t scheduled_tasks_count = jd->scheduled_tasks_count();
-      if (scheduled_tasks_count < jd->min_number_of_tasks()) {
-        jd->set_scheduled_tasks_count(--scheduled_tasks_count);
-        delta->set_type(SchedulingDelta::NOOP);
-        continue;
+      if (td_ptr->has_affinity()
+          && (td_ptr->affinity().has_pod_affinity()
+          || td_ptr->affinity().has_pod_anti_affinity())) {
+        if (queue_based_schedule) {
+          vector<SchedulingDelta>* delta_vec =
+                            FindOrNull(affinity_job_to_deltas_, jd);
+          if (delta_vec) {
+            if (affinity_delta_tasks.find(delta->task_id()) 
+                                     == affinity_delta_tasks.end()) {
+              delta_vec->push_back(*delta);
+              affinity_delta_tasks.insert(delta->task_id());
+            }
+          } else {
+            vector<SchedulingDelta> delta_v;
+            delta_v.push_back(*delta);
+            CHECK(InsertIfNotPresent(&affinity_job_to_deltas_, jd, delta_v));
+            affinity_delta_tasks.insert(delta->task_id());
+          }
+          delta->set_type(SchedulingDelta::NOOP);
+          continue;
+        }
+      } else {
+        uint64_t scheduled_tasks_count = jd->scheduled_tasks_count();
+        if (scheduled_tasks_count < jd->min_number_of_tasks()) {
+          jd->set_scheduled_tasks_count(--scheduled_tasks_count);
+          delta->set_type(SchedulingDelta::NOOP);
+          delta_tasks.push_back(delta->task_id());
+          continue;
+        }
       }
     }
     if (delta->type() == SchedulingDelta::NOOP) {
@@ -764,7 +788,9 @@ uint64_t FlowScheduler::RunSchedulingIteration(
     JobDescriptor* jd = FindOrNull(*job_map_,
                                    JobIDFromString(td_ptr->job_id()));
     CHECK_NOTNULL(jd);
-    if (jd->is_gang_scheduling_job()) {
+    if (jd->is_gang_scheduling_job()
+        && affinity_delta_tasks.find(td_ptr->uid())
+                                  == affinity_delta_tasks.end()) {
       uint64_t scheduled_tasks_count = jd->scheduled_tasks_count();
       jd->set_scheduled_tasks_count(++scheduled_tasks_count);
     }
@@ -826,6 +852,52 @@ void FlowScheduler::UpdateCostModelResourceStats() {
       boost::bind(&CostModelInterface::PrepareStats, cost_model_, _1),
       boost::bind(&CostModelInterface::GatherStats, cost_model_, _1, _2),
       boost::bind(&CostModelInterface::UpdateStats, cost_model_, _1, _2));
+}
+
+void FlowScheduler::UpdateGangSchedulingDeltas(
+                    SchedulerStats* scheduler_stats,
+                    vector<SchedulingDelta>* deltas_output,
+                    vector<uint64_t>* unscheduled_normal_tasks,
+                    unordered_set<uint64_t>* unscheduled_affinity_tasks_set,
+                    vector<uint64_t>* unscheduled_affinity_tasks) {
+  for (auto task : delta_tasks) {
+    vector<uint64_t>::iterator it = find(unscheduled_normal_tasks->begin(),
+                                         unscheduled_normal_tasks->end(), 
+                                         task);
+    if (it == unscheduled_normal_tasks->end()) {
+      unscheduled_normal_tasks->push_back(task);
+    }
+  }
+
+  vector<SchedulingDelta*> delta_vec;
+  for (auto it = affinity_job_to_deltas_.begin(); 
+            it != affinity_job_to_deltas_.end(); ++it) {
+    JobDescriptor* jd_ptr = it->first;
+    if (jd_ptr->scheduled_tasks_count() >= jd_ptr->min_number_of_tasks()) {
+      for (auto delta : it->second) {
+        SchedulingDelta* new_delta = new SchedulingDelta;
+        new_delta->set_type(delta.type());
+        new_delta->set_task_id(delta.task_id());
+        new_delta->set_resource_id(delta.resource_id());
+        delta_vec.push_back(new_delta);
+      }
+    } else {
+      for (auto delta : it->second) {
+        unscheduled_affinity_tasks_set->insert(delta.task_id());
+        unscheduled_affinity_tasks->push_back(delta.task_id());
+      }
+    }
+    jd_ptr->set_scheduled_tasks_count(0);
+  }
+  ApplySchedulingDeltas(delta_vec);
+  if (deltas_output) {
+    for (auto delta_op : delta_vec) {
+      deltas_output->push_back(*delta_op);
+    }
+  }
+  delta_vec.clear();
+  affinity_job_to_deltas_.clear();
+  affinity_delta_tasks.clear();
 }
 
 }  // namespace scheduler

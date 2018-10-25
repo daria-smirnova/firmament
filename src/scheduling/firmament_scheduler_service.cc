@@ -191,18 +191,10 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
     // requirements.
     scheduler_->ScheduleAllJobs(&sstat, &deltas);
     uint64_t total_unsched_tasks_size = 0;
+    vector<uint64_t> unscheduled_normal_tasks;
     if (FLAGS_gather_unscheduled_tasks) {
       // Get unscheduled tasks of above scheduling round.
-      vector<uint64_t> unscheduled_normal_tasks;
       cost_model_->GetUnscheduledTasks(&unscheduled_normal_tasks);
-      auto unscheduled_normal_tasks_ret = reply->mutable_unscheduled_tasks();
-      for (auto& unsched_task : unscheduled_normal_tasks) {
-        uint64_t* unsched_task_ret = unscheduled_normal_tasks_ret->Add();
-        *unsched_task_ret = unsched_task;
-        total_unsched_tasks_size++;
-      }
-      // Clear unscheduled tasks related maps and sets.
-      cost_model_->ClearUnscheduledTasksData();
     }
 
     // Schedule tasks having pod affinity/anti-affinity.
@@ -217,23 +209,42 @@ class FirmamentSchedulerServiceImpl final : public FirmamentScheduler::Service {
       TaskID_t task_id = dynamic_cast<FlowScheduler*>(scheduler_)
                              ->GetSingleTaskTobeScheduled();
       if (FLAGS_gather_unscheduled_tasks) {
-        if (!task_scheduled) {
-          if (unscheduled_affinity_tasks_set.find(task_id) ==
-              unscheduled_affinity_tasks_set.end()) {
-            unscheduled_affinity_tasks_set.insert(task_id);
-            unscheduled_affinity_tasks.push_back(task_id);
+        TaskDescriptor* td_ptr = FindPtrOrNull(*task_map_, task_id);
+        CHECK_NOTNULL(td_ptr);
+        JobDescriptor* jd =
+                  FindOrNull(*job_map_, JobIDFromString(td_ptr->job_id()));
+        if (!(jd->is_gang_scheduling_job())) {
+          if (!task_scheduled) {
+            if (unscheduled_affinity_tasks_set.find(task_id) ==
+                unscheduled_affinity_tasks_set.end()) {
+              unscheduled_affinity_tasks_set.insert(task_id);
+              unscheduled_affinity_tasks.push_back(task_id);
+            }
+          } else {
+            unscheduled_affinity_tasks_set.erase(task_id);
           }
-        } else {
-          unscheduled_affinity_tasks_set.erase(task_id);
         }
       }
       clock_t stop = clock();
       elapsed = (double)(stop - start) * 1000.0 / CLOCKS_PER_SEC;
     }
+    //For pod affinity/anti-affinity gang scheduling tasks
+    scheduler_->UpdateGangSchedulingDeltas(&sstat, &deltas,
+                                &unscheduled_normal_tasks,
+                                &unscheduled_affinity_tasks_set,
+                                &unscheduled_affinity_tasks);
+
     // Get unscheduled tasks of above scheduling round which tried scheduling
     // tasks having pod affinity/anti-affinity. And populate the same into
     // reply.
     if (FLAGS_gather_unscheduled_tasks) {
+      auto unscheduled_normal_tasks_ret = reply->mutable_unscheduled_tasks();
+      for (auto& unsched_task : unscheduled_normal_tasks) {
+        uint64_t* unsched_task_ret = unscheduled_normal_tasks_ret->Add();
+        *unsched_task_ret = unsched_task;
+        total_unsched_tasks_size++;
+      }
+      cost_model_->ClearUnscheduledTasksData();
       auto unscheduled_affinity_tasks_ret = reply->mutable_unscheduled_tasks();
       for (auto& unsched_task : unscheduled_affinity_tasks) {
         if (unscheduled_affinity_tasks_set.find(unsched_task) !=
