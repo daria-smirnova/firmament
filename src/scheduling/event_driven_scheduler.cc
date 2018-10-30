@@ -658,7 +658,7 @@ void EventDrivenScheduler::LazyGraphReduction(
           if (queue_based_schedule == false || one_task_runnable == true)
             continue;
           for (auto task_itr = affinity_antiaffinity_tasks_->begin();
-               task_itr != affinity_antiaffinity_tasks_->end();) {
+               task_itr != affinity_antiaffinity_tasks_->end(); ++task_itr) {
             TaskDescriptor* tdp = FindPtrOrNull(*task_map_, *task_itr);
             if (tdp) {
               if ((tdp->state() == TaskDescriptor::RUNNABLE) &&

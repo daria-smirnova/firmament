@@ -190,7 +190,7 @@ class EventDrivenScheduler : public SchedulerInterface {
   bool one_task_runnable;
   bool queue_based_schedule;
   //Gang schedule tasks deltas
-  vector<uint64_t> delta_tasks;
+  unordered_set<JobDescriptor*> delta_jobs;
   // Pod affinity/anti-affinity gang schedule tasks deltas
   unordered_map<JobDescriptor*, vector<SchedulingDelta>> affinity_job_to_deltas_;
   unordered_set<uint64_t> affinity_delta_tasks;

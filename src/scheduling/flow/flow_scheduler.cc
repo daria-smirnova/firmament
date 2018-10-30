@@ -232,7 +232,9 @@ uint64_t FlowScheduler::ApplySchedulingDeltas(
         if (scheduled_tasks_count < jd->min_number_of_tasks()) {
           jd->set_scheduled_tasks_count(--scheduled_tasks_count);
           delta->set_type(SchedulingDelta::NOOP);
-          delta_tasks.push_back(delta->task_id());
+          if (delta_jobs.find(jd) == delta_jobs.end()) {
+            delta_jobs.insert(jd);
+          }
           continue;
         }
       }
@@ -860,12 +862,21 @@ void FlowScheduler::UpdateGangSchedulingDeltas(
                     vector<uint64_t>* unscheduled_normal_tasks,
                     unordered_set<uint64_t>* unscheduled_affinity_tasks_set,
                     vector<uint64_t>* unscheduled_affinity_tasks) {
-  for (auto task : delta_tasks) {
-    vector<uint64_t>::iterator it = find(unscheduled_normal_tasks->begin(),
-                                         unscheduled_normal_tasks->end(), 
-                                         task);
-    if (it == unscheduled_normal_tasks->end()) {
-      unscheduled_normal_tasks->push_back(task);
+  for (auto job_ptr : delta_jobs) {
+    TaskDescriptor rtd = job_ptr->root_task();
+    for (auto td : rtd.spawned()) {
+      vector<uint64_t>::iterator it = find(unscheduled_normal_tasks->begin(),
+                                      unscheduled_normal_tasks->end(),
+                                      td.uid());
+      if (it == unscheduled_normal_tasks->end()) {
+        unscheduled_normal_tasks->push_back(td.uid());
+      }
+    }
+    vector<uint64_t>::iterator rit = find(unscheduled_normal_tasks->begin(),
+                                     unscheduled_normal_tasks->end(),
+                                     rtd.uid());
+    if (rit == unscheduled_normal_tasks->end()) {
+      unscheduled_normal_tasks->push_back(rtd.uid());
     }
   }
 
@@ -895,6 +906,7 @@ void FlowScheduler::UpdateGangSchedulingDeltas(
       deltas_output->push_back(*delta_op);
     }
   }
+  delta_jobs.clear();
   delta_vec.clear();
   affinity_job_to_deltas_.clear();
   affinity_delta_tasks.clear();
