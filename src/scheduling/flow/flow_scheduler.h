@@ -141,6 +141,8 @@ class FlowScheduler : public EventDrivenScheduler {
   uint64_t RunSchedulingIteration(SchedulerStats* scheduler_stats,
     vector<SchedulingDelta>* deltas_output, vector<JobDescriptor*>* job_vector);
   void UpdateCostModelResourceStats();
+  void AddKnowledgeBaseResourceStats(TaskDescriptor* td_ptr,
+                                                 ResourceStatus* rs);
 
   // Pointer to the coordinator's topology manager
   shared_ptr<TopologyManager> topology_manager_;

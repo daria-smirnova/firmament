@@ -218,14 +218,7 @@ uint64_t FlowScheduler::ApplySchedulingDeltas(
               delta_vec->push_back(*delta);
               affinity_delta_tasks.insert(delta->task_id());
             }
-          } else {
-            vector<SchedulingDelta> delta_v;
-            delta_v.push_back(*delta);
-            CHECK(InsertIfNotPresent(&affinity_job_to_deltas_, jd, delta_v));
-            affinity_delta_tasks.insert(delta->task_id());
           }
-          delta->set_type(SchedulingDelta::NOOP);
-          continue;
         }
       } else {
         uint64_t scheduled_tasks_count = jd->scheduled_tasks_count();
@@ -372,6 +365,10 @@ void FlowScheduler::HandleJobCompletion(JobID_t job_id) {
 void FlowScheduler::HandleJobRemoval(JobID_t job_id) {
   boost::lock_guard<boost::recursive_mutex> lock(scheduling_lock_);
   flow_graph_manager_->JobRemoved(job_id);
+  JobDescriptor* jdp = FindOrNull(*job_map_, job_id);
+  if (jdp) {
+      affinity_job_to_deltas_.erase(jdp);
+  }
   // Call into superclass handler
   EventDrivenScheduler::HandleJobRemoval(job_id);
 }
@@ -407,6 +404,15 @@ void FlowScheduler::HandleTaskEviction(TaskDescriptor* td_ptr,
   boost::lock_guard<boost::recursive_mutex> lock(scheduling_lock_);
   flow_graph_manager_->TaskEvicted(td_ptr->uid(),
                                    ResourceIDFromString(rd_ptr->uuid()));
+  vector<TaskID_t>::iterator it =
+                    find(affinity_antiaffinity_tasks_->begin(),
+                    affinity_antiaffinity_tasks_->end(), td_ptr->uid());
+  if (it == affinity_antiaffinity_tasks_->end()) {
+     affinity_antiaffinity_tasks_->push_back(*it);
+  }
+  if (FLAGS_pod_affinity_antiaffinity_symmetry) {
+    cost_model_->RemoveTaskFromTaskSymmetryMap(td_ptr);
+  }
   EventDrivenScheduler::HandleTaskEviction(td_ptr, rd_ptr);
 }
 
@@ -856,12 +862,46 @@ void FlowScheduler::UpdateCostModelResourceStats() {
       boost::bind(&CostModelInterface::UpdateStats, cost_model_, _1, _2));
 }
 
+void FlowScheduler::AddKnowledgeBaseResourceStats(TaskDescriptor* td_ptr,
+                                               ResourceStatus* rs) {
+  ResourceStats resource_stats;
+  CpuStats* cpu_stats = resource_stats.add_cpus_stats();
+  bool have_sample = knowledge_base_->GetLatestStatsForMachine(
+      ResourceIDFromString(rs->mutable_topology_node()->parent_id()),
+      &resource_stats);
+  if (have_sample) {
+    cpu_stats->set_cpu_allocatable(
+        cpu_stats->cpu_allocatable() +
+        td_ptr->resource_request().cpu_cores());
+    resource_stats.set_mem_allocatable(
+        resource_stats.mem_allocatable() +
+        td_ptr->resource_request().ram_cap());
+    resource_stats.set_ephemeral_storage_allocatable(
+        resource_stats.ephemeral_storage_allocatable() +
+        td_ptr->resource_request().ephemeral_storage());
+    double cpu_utilization =
+        (cpu_stats->cpu_capacity() - cpu_stats->cpu_allocatable()) /
+        (double)cpu_stats->cpu_capacity();
+    cpu_stats->set_cpu_utilization(cpu_utilization);
+    double mem_utilization = (resource_stats.mem_capacity() -
+                              resource_stats.mem_allocatable()) /
+                             (double)resource_stats.mem_capacity();
+    resource_stats.set_mem_utilization(mem_utilization);
+    double ephemeral_storage_utilization = (resource_stats.ephemeral_storage_capacity() -
+                              resource_stats.ephemeral_storage_allocatable()) /
+                             (double)resource_stats.ephemeral_storage_capacity();
+    resource_stats.set_ephemeral_storage_utilization(ephemeral_storage_utilization);
+    knowledge_base_->AddMachineSample(resource_stats);
+  }
+}
+
 void FlowScheduler::UpdateGangSchedulingDeltas(
                     SchedulerStats* scheduler_stats,
                     vector<SchedulingDelta>* deltas_output,
                     vector<uint64_t>* unscheduled_normal_tasks,
                     unordered_set<uint64_t>* unscheduled_affinity_tasks_set,
                     vector<uint64_t>* unscheduled_affinity_tasks) {
+  // update batch schedule deltas
   for (auto job_ptr : delta_jobs) {
     TaskDescriptor rtd = job_ptr->root_task();
     for (auto td : rtd.spawned()) {
@@ -872,6 +912,8 @@ void FlowScheduler::UpdateGangSchedulingDeltas(
         unscheduled_normal_tasks->push_back(td.uid());
       }
     }
+    delta_jobs.clear();
+
     vector<uint64_t>::iterator rit = find(unscheduled_normal_tasks->begin(),
                                      unscheduled_normal_tasks->end(),
                                      rtd.uid());
@@ -880,35 +922,71 @@ void FlowScheduler::UpdateGangSchedulingDeltas(
     }
   }
 
-  vector<SchedulingDelta*> delta_vec;
-  for (auto it = affinity_job_to_deltas_.begin(); 
+  // update queue schedule deltas
+  for (auto it = affinity_job_to_deltas_.begin();
             it != affinity_job_to_deltas_.end(); ++it) {
     JobDescriptor* jd_ptr = it->first;
-    if (jd_ptr->scheduled_tasks_count() >= jd_ptr->min_number_of_tasks()) {
-      for (auto delta : it->second) {
-        SchedulingDelta* new_delta = new SchedulingDelta;
-        new_delta->set_type(delta.type());
-        new_delta->set_task_id(delta.task_id());
-        new_delta->set_resource_id(delta.resource_id());
-        delta_vec.push_back(new_delta);
+    TaskDescriptor root_td = jd_ptr->root_task();
+    if (!it->second.size()) {
+      for (auto td : root_td.spawned()) {
+        if (td.state() != TaskDescriptor::RUNNING) {
+          unscheduled_affinity_tasks_set->insert(td.uid());
+          unscheduled_affinity_tasks->push_back(td.uid());
+        }
       }
-    } else {
+      if (root_td.state() != TaskDescriptor::RUNNING) {
+        unscheduled_affinity_tasks_set->insert(root_td.uid());
+        unscheduled_affinity_tasks->push_back(root_td.uid());
+      }
+      continue;
+    }    
+    if (jd_ptr->scheduled_tasks_count() < jd_ptr->min_number_of_tasks()) {
       for (auto delta : it->second) {
-        unscheduled_affinity_tasks_set->insert(delta.task_id());
-        unscheduled_affinity_tasks->push_back(delta.task_id());
+        TaskDescriptor* td_ptr = FindPtrOrNull(*task_map_, delta.task_id());
+        ResourceID_t res_id = ResourceIDFromString(delta.resource_id());
+        ResourceStatus* rs = FindPtrOrNull(*resource_map_, res_id);
+        CHECK_NOTNULL(td_ptr);
+        CHECK_NOTNULL(rs);
+        if (FLAGS_resource_stats_update_based_on_resource_reservation) {
+          AddKnowledgeBaseResourceStats(td_ptr, rs);
+        }
+        HandleTaskEviction(td_ptr, rs->mutable_descriptor());
+        td_ptr->set_state(TaskDescriptor::CREATED);
+        td_ptr->clear_scheduled_to_resource();
+        JobID_t job_id = JobIDFromString(jd_ptr->uuid());
+        unordered_set<TaskID_t>* runnables_for_job =
+          FindOrNull(runnable_tasks_, job_id);
+        if (runnables_for_job) {
+          runnables_for_job->erase(delta.task_id());
+        }
+        vector<SchedulingDelta>::iterator it =
+              find_if(deltas_output->begin(), deltas_output->end(),
+              [&](SchedulingDelta& d){return (d.task_id() == delta.task_id());});
+        if (it != deltas_output->end()) {
+          deltas_output->erase(it);
+        }
+      }
+      for (auto td : root_td.spawned()) {
+        unscheduled_affinity_tasks_set->insert(td.uid());
+        unscheduled_affinity_tasks->push_back(td.uid());
+      }
+      unscheduled_affinity_tasks_set->insert(root_td.uid());
+      unscheduled_affinity_tasks->push_back(root_td.uid());
+    } else {
+      for (auto td : root_td.spawned()) {
+        if (td.state() != TaskDescriptor::RUNNING) {
+          unscheduled_affinity_tasks_set->insert(td.uid());
+          unscheduled_affinity_tasks->push_back(td.uid());
+        }
+      }
+      if (root_td.state() != TaskDescriptor::RUNNING) {
+        unscheduled_affinity_tasks_set->insert(root_td.uid());
+        unscheduled_affinity_tasks->push_back(root_td.uid());
       }
     }
     jd_ptr->set_scheduled_tasks_count(0);
+    it->second.clear();
   }
-  ApplySchedulingDeltas(delta_vec);
-  if (deltas_output) {
-    for (auto delta_op : delta_vec) {
-      deltas_output->push_back(*delta_op);
-    }
-  }
-  delta_jobs.clear();
-  delta_vec.clear();
-  affinity_job_to_deltas_.clear();
   affinity_delta_tasks.clear();
 }
 
