@@ -327,6 +327,11 @@ void FlowGraphManager::SchedulingDeltasForPreemptedTasks(
         // a PREEMPT delta because the task has finished.
         continue;
       }
+      if (task_node->td_ptr_->state() != TaskDescriptor::RUNNING) {
+        // For pod affinity/antiaffinity tasks from previous 
+        // scheduling round not satisfying gang scheduling.
+        continue;
+      }
       const uint64_t* res_node_id = FindOrNull(task_mappings, task_node->id_);
       if (!res_node_id) {
         // The task doesn't exist in the mappings => the task has been

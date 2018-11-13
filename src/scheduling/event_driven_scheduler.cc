@@ -101,6 +101,14 @@ EventDrivenScheduler::~EventDrivenScheduler() {
 void EventDrivenScheduler::AddJob(JobDescriptor* jd_ptr) {
   boost::lock_guard<boost::recursive_mutex> lock(scheduling_lock_);
   InsertOrUpdate(&jobs_to_schedule_, JobIDFromString(jd_ptr->uuid()), jd_ptr);
+  if (jd_ptr->is_gang_scheduling_job()) {
+    TaskDescriptor rtd = jd_ptr->root_task();
+    if (rtd.has_affinity() && (rtd.affinity().has_pod_affinity()
+                           || rtd.affinity().has_pod_anti_affinity())) {
+      vector<SchedulingDelta> delta_v;
+      InsertIfNotPresent(&affinity_job_to_deltas_, jd_ptr, delta_v);
+    }
+  }
 }
 
 void EventDrivenScheduler::BindTaskToResource(TaskDescriptor* td_ptr,
@@ -658,7 +666,7 @@ void EventDrivenScheduler::LazyGraphReduction(
           if (queue_based_schedule == false || one_task_runnable == true)
             continue;
           for (auto task_itr = affinity_antiaffinity_tasks_->begin();
-               task_itr != affinity_antiaffinity_tasks_->end();) {
+               task_itr != affinity_antiaffinity_tasks_->end(); ++task_itr) {
             TaskDescriptor* tdp = FindPtrOrNull(*task_map_, *task_itr);
             if (tdp) {
               if ((tdp->state() == TaskDescriptor::RUNNABLE) &&

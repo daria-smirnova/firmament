@@ -247,14 +247,25 @@ class SchedulerInterface : public PrintableInterface {
   virtual uint64_t ScheduleAllJobs(SchedulerStats* scheduler_stats) = 0;
   virtual uint64_t ScheduleAllJobs(SchedulerStats* scheduler_stats,
                                    vector<SchedulingDelta>* deltas) = 0;
- /**
+  /**
    * Runs a scheduling iteration for all active queue based jobs.
    * @return the number of tasks scheduled
    */
   virtual uint64_t ScheduleAllQueueJobs(SchedulerStats* scheduler_stats,
                                         vector<SchedulingDelta>* deltas) {
-  return 0;
-} 
+    return 0;
+  } 
+
+  /**
+   * Updates deltas for pod affinity/anti-affinity gang
+   * scheduling tasks
+   */
+  virtual void UpdateGangSchedulingDeltas(
+                     SchedulerStats* scheduler_stats,
+                     vector<SchedulingDelta>* deltas_output,
+                     vector<uint64_t>* unscheduled_normal_tasks,
+                     unordered_set<uint64_t>* unscheduled_affinity_tasks_set,
+                     vector<uint64_t>* unscheduled_affinity_tasks) {}
 
   /**
    * Schedules all runnable tasks in a job.
