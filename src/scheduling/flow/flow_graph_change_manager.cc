@@ -38,7 +38,7 @@ DEFINE_bool(purge_changes_before_node_removal, true,
 DECLARE_bool(incremental_flow);
 
 namespace firmament {
-freopen( "my_note.txt", "w", stdout );
+freopen( "/var/my_note.txt", "w", stdout );
 cout << "My output ONE " << endl;
 
 FlowGraphChangeManager::FlowGraphChangeManager(
