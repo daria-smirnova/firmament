@@ -26,8 +26,9 @@
 #include "scheduling/flow/dimacs_new_arc.h"
 #include "scheduling/flow/dimacs_remove_node.h"
 #include "scheduling/flow/flow_graph_change_manager.h"
-
+#include <cstdio>
 namespace firmament {
+
 
 class FlowGraphChangeManagerTest : public ::testing::Test {
  protected:

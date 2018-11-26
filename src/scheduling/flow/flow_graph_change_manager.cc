@@ -24,8 +24,8 @@
 #include "scheduling/flow/dimacs_change_arc.h"
 #include "scheduling/flow/dimacs_new_arc.h"
 #include "scheduling/flow/dimacs_remove_node.h"
-// Added
-#include <cstdio>
+
+
 
 DEFINE_bool(remove_duplicate_changes, true,
             "True if duplicate DIMACS changes should be removed");
@@ -38,8 +38,7 @@ DEFINE_bool(purge_changes_before_node_removal, true,
 DECLARE_bool(incremental_flow);
 
 namespace firmament {
-freopen( "/var/my_note.txt", "w", stdout );
-cout << "My output ONE " << endl;
+
 
 FlowGraphChangeManager::FlowGraphChangeManager(
     DIMACSChangeStats* dimacs_stats)
@@ -158,7 +157,6 @@ void FlowGraphChangeManager::ChangeArcCost(FlowGraphArc* arc,
                                            const char* comment) {
   CHECK_NOTNULL(arc);
   int64_t old_cost = arc->cost_;
-  cout << "My output " << endl;
   if (old_cost != cost) {
     flow_graph_->ChangeArcCost(arc, cost);
     if (FLAGS_incremental_flow) {
